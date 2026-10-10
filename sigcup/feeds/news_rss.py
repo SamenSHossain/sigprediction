@@ -31,7 +31,7 @@ from sigcup.feeds.nlp.gazetteer import (
     parse_ts,
     pick,
     strip_html,
-    write_posts,
+    write_posts_async,
 )
 from sigcup.settings import Secrets, StrategyConfig
 
@@ -179,7 +179,7 @@ async def run_once(
             if body is None:
                 continue
             drafts = parse_feed(body, race_id=race_id, source_url=url, now=now)
-            n = write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+            n = await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
             total += n
             with session_factory() as s:
                 kv_set(s, _kv_key(url), {"etag": etag, "modified": modified, "fetched_at": now.isoformat()})

@@ -8,7 +8,9 @@ another workstream)::
 
 Modules are imported *lazily by dotted name* the first time they are due, and every call is wrapped in
 try/except with a timeout, so an unfinished or crashing collector never kills the process (it is logged
-and retried on its next tick). Cadences come from ``cfg.feeds``; ``ref_markets`` re-evaluates its
+and retried on its next tick; a failed import is retried after a backoff of RESOLVE_RETRY_S doubling up
+to RESOLVE_RETRY_MAX_S). The heartbeat is 'degraded' while the latest run of any collector failed
+(cumulative error counts stay in its detail). Cadences come from ``cfg.feeds``; ``ref_markets`` re-evaluates its
 cadence every cycle and switches to ``cfg.election_night.ref_cadence_s`` while
 ``sigcup.trader.election_night.is_active`` says election night is on (if that import fails, the normal
 cadence is kept).
@@ -34,7 +36,7 @@ import random
 import signal
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sigcup.common.log import get_logger, setup_logging
@@ -52,6 +54,8 @@ HEARTBEAT_S = 30
 MIN_CADENCE_S = 5
 STAGGER_S = 2.0  # start collectors a few seconds apart so the first pass does not burst every host at once
 MAX_RUN_TIMEOUT_S = 900.0
+RESOLVE_RETRY_S = 60.0  # first retry of a failed collector import; doubles per failure
+RESOLVE_RETRY_MAX_S = 1800.0
 
 SessionFactory = Callable[[], Any]
 RunOnce = Callable[[SessionFactory, StrategyConfig, Secrets], Awaitable[int | None]]
@@ -151,13 +155,19 @@ class FeedsRunner:
         self.heartbeat_s = heartbeat_s
         self.stagger_s = stagger_s
         self.stats: dict[str, CollectorStats] = {s.name: CollectorStats() for s in self.specs}
-        self._fns: dict[str, RunOnce | None] = {}
+        self._fns: dict[str, RunOnce] = {}
+        self._retry: dict[str, tuple[datetime, float]] = {}  # name -> (next import attempt, backoff s)
 
     # -- lazy module resolution --------------------------------------------------------------
     def resolve(self, spec: CollectorSpec) -> RunOnce | None:
-        """Import spec.module and return its run_once (cached); None (logged once) when unavailable."""
+        """Import spec.module and return its run_once (cached once found); None when unavailable. A
+        failed import is retried after a backoff (RESOLVE_RETRY_S, doubling to RESOLVE_RETRY_MAX_S)."""
         if spec.name in self._fns:
             return self._fns[spec.name]
+        now = self.now()
+        retry = self._retry.get(spec.name)
+        if retry is not None and now < retry[0]:
+            return None
         fn: RunOnce | None = None
         try:
             mod = importlib.import_module(spec.module)
@@ -170,8 +180,13 @@ class FeedsRunner:
             log.warning("collector %s not implemented yet (%s); skipping", spec.name, e)
         except Exception as e:  # noqa: BLE001
             log.warning("collector %s: import of %s failed: %s: %s", spec.name, spec.module, type(e).__name__, e)
-        self._fns[spec.name] = fn
-        return fn
+        if fn is not None:
+            self._fns[spec.name] = fn
+            self._retry.pop(spec.name, None)
+            return fn
+        backoff = RESOLVE_RETRY_S if retry is None else min(RESOLVE_RETRY_MAX_S, 2.0 * retry[1])
+        self._retry[spec.name] = (now + timedelta(seconds=backoff), backoff)
+        return None
 
     # -- one guarded run ---------------------------------------------------------------------
     async def run_collector(self, spec: CollectorSpec) -> int | None:
@@ -251,8 +266,10 @@ class FeedsRunner:
         }
 
     async def beat(self) -> None:
-        errors = sum(st.errors for st in self.stats.values())
-        status = "ok" if errors == 0 else "degraded"
+        # the latest run of each collector decides (a cumulative count would stay 'degraded' forever
+        # after one transient failure and hide a later real outage); totals remain in the detail
+        failing = [name for name, st in self.stats.items() if st.last_error is not None]
+        status = "degraded" if failing else "ok"
         detail = json.dumps(self.summary(), default=str)[:4000]
         with self.session_factory() as s:
             heartbeat(s, PROCESS_NAME, status, detail)

@@ -26,7 +26,7 @@ from typing import Any
 
 from sigcup.common.time import utc_now
 from sigcup.db.repo import kv_get, kv_set
-from sigcup.feeds.nlp.gazetteer import Gazetteer, PostDraft, load_gazetteer, parse_ts, pick, write_posts
+from sigcup.feeds.nlp.gazetteer import Gazetteer, PostDraft, load_gazetteer, parse_ts, pick, write_posts_async
 from sigcup.settings import Secrets, StrategyConfig
 
 log = logging.getLogger(__name__)
@@ -263,7 +263,7 @@ async def run_once(
     written = 0
     if duration_s > 0:
         drafts = await consume_jetstream(gazetteer, duration_s, url=jetstream_url, connect=connect, now=now)
-        written += write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+        written += await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
 
     client = search_client if search_client is not None else _make_search_client(secrets)
     if client is not None and search_queries > 0:
@@ -280,7 +280,7 @@ async def run_once(
                 budget -= max(1, len(gazetteer.search_terms(rid)))
                 i += 1
             drafts = await asyncio.to_thread(backfill_sync, client, gazetteer, picked, pause_s=search_pause_s, now=now)
-            written += write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+            written += await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
             with session_factory() as s:
                 kv_set(s, KV_SEARCH_CURSOR, i % len(queue))
     log.info("bluesky: %d new posts", written)

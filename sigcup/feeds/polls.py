@@ -338,6 +338,38 @@ class _BlockParser(HTMLParser):
         self.text.append(data)
 
 
+_HEADER_WORD_RE = re.compile(
+    r"\b(date|race|races|state|district|seat|rating|ratings|old|new|previous|prior|current|change|changes|"
+    r"incumbent|candidates?|pollster|sample|spread|margin|updated|forecast|chamber)\b",
+    re.IGNORECASE,
+)
+_NUMBER_CELL_RE = re.compile(r"[-+]?\d+(?:\.\d+)?%?")
+
+
+def _looks_like_header(cells: Sequence[str]) -> bool:
+    """A <td> row that is really a header: header words (or rater names), and no race, rating, number
+    or date cell."""
+    texts = [c for c in cells if c]
+    if len(texts) < 2:
+        return False
+    for c in texts:
+        if race_id_from_text(c) or normalize_rating(c) or _NUMBER_CELL_RE.fullmatch(c.strip()):
+            return False
+        if re.search(r"\d", c) and parse_date(c) is not None:
+            return False
+    return any(_HEADER_WORD_RE.search(c) or source_from_header(c) for c in texts)
+
+
+def _promote_td_header(table: HtmlTable) -> None:
+    """WordPress-style tables put the header in <td> (often <td><strong>): promote the first row when
+    no <th> header exists and it looks like one, so the 'Old Rating' exclusion and the date column work."""
+    if table.header is not None or len(table.rows) < 2:
+        return
+    first = table.rows[0]
+    if _looks_like_header(first.cells):
+        first.is_header = True
+
+
 def extract_blocks(html: str) -> list[HtmlTable | HtmlList]:
     """Every <table> and <ul>/<ol> in the document, in order, with the nearest preceding heading."""
     p = _BlockParser()
@@ -346,6 +378,9 @@ def extract_blocks(html: str) -> list[HtmlTable | HtmlList]:
         p.close()
     except Exception as e:  # noqa: BLE001  (never let malformed HTML kill a collector)
         log.warning("html parse error: %s", type(e).__name__)
+    for b in p.blocks:
+        if isinstance(b, HtmlTable):
+            _promote_td_header(b)
     return p.blocks
 
 
@@ -407,13 +442,33 @@ def _column(table: HtmlTable, i: int) -> list[str]:
     return [r.cells[i] if i < len(r.cells) else "" for r in table.body]
 
 
-def _race_column(table: HtmlTable, chamber: str | None) -> int | None:
+def _heading_chamber(block: HtmlTable) -> str | None:
+    """'Senate' / 'Governor' / 'House' named by the block's heading or caption (None when ambiguous)."""
+    text = " ".join(t for t in (block.heading, block.caption) if t).lower()
+    found = {
+        ch
+        for ch, pat in (("senate", r"\bsenate\b"), ("governor", r"\bgovern(?:or|ors|orship)\b|\bgubernatorial\b"), ("house", r"\bhouse\b"))
+        if re.search(pat, text)
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _race_id(text: str, chamber: str | None, hint: str | None) -> str | None:
+    """race_id_from_text with the page's chamber; on a mixed page (chamber None) a bare state name
+    falls back to the chamber its block heading names."""
+    rid = race_id_from_text(text, chamber)
+    if rid is None and chamber is None and hint:
+        rid = race_id_from_text(text, hint)
+    return rid
+
+
+def _race_column(table: HtmlTable, chamber: str | None, hint: str | None = None) -> int | None:
     body = table.body
     if not body:
         return None
     best, best_n = None, 0
     for i in range(table.ncols):
-        n = sum(1 for c in _column(table, i) if race_id_from_text(c, chamber))
+        n = sum(1 for c in _column(table, i) if _race_id(c, chamber, hint))
         if n > best_n:
             best, best_n = i, n
     if best is None or best_n < max(1, len(body) // 3):
@@ -422,10 +477,11 @@ def _race_column(table: HtmlTable, chamber: str | None) -> int | None:
 
 
 def _rating_columns(table: HtmlTable, race_col: int, default_source: str) -> list[tuple[int, str]]:
-    """(column index, source) for every column whose cells mostly parse as ratings."""
+    """(column index, source) for every column whose cells mostly parse as ratings. When several columns
+    map to the same source the RIGHTMOST wins (logs read old -> new, left to right)."""
     body = table.body
     header = table.header or []
-    out: list[tuple[int, str]] = []
+    by_source: dict[str, int] = {}
     for i in range(table.ncols):
         if i == race_col:
             continue
@@ -434,8 +490,13 @@ def _rating_columns(table: HtmlTable, race_col: int, default_source: str) -> lis
             continue
         n = sum(1 for c in _column(table, i) if normalize_rating(c))
         if n >= max(1, (len(body) + 1) // 2):
-            out.append((i, source_from_header(h) or default_source))
-    return out
+            by_source[source_from_header(h) or default_source] = i
+    return sorted(((i, src) for src, i in by_source.items()), key=lambda t: t[0])
+
+
+def _is_change_log(table: HtmlTable) -> bool:
+    """A table with an excluded (old / previous ...) rating column is a change log."""
+    return any(_header_excluded(h) for h in (table.header or []))
 
 
 def _date_column(table: HtmlTable) -> int | None:
@@ -491,21 +552,25 @@ def parse_ratings_html(
                 if rid:
                     keep(_make_row(rid, source, block.heading or "", ts, ratings_prob))
             continue
-        race_col = _race_column(block, chamber)
+        hint = None if chamber is not None else _heading_chamber(block)
+        race_col = _race_column(block, chamber, hint)
         if race_col is None:
             continue
         cols = _rating_columns(block, race_col, source)
         date_col = _date_column(block)
+        change_log = _is_change_log(block)
         heading_rating = block.heading if normalize_rating(block.heading) else (block.caption if normalize_rating(block.caption) else None)
         if not cols and heading_rating is None:
             continue
         for r in block.body:
             if race_col >= len(r.cells):
                 continue
-            rid = race_id_from_text(r.cells[race_col], chamber)
+            rid = _race_id(r.cells[race_col], chamber, hint)
             if not rid:
                 continue
             row_ts = parse_date(r.cells[date_col], ts) if date_col is not None and date_col < len(r.cells) else ts
+            if change_log and date_col is not None and (date_col >= len(r.cells) or parse_date(r.cells[date_col]) is None):
+                continue  # an undated change-log row must not pose as today's rating
             if cols:
                 for ci, src in cols:
                     if ci < len(r.cells):
@@ -813,7 +878,10 @@ SessionFactory = Callable[[], Any]
 
 def ensure_race_rows(session_factory: SessionFactory, data: Mapping[str, Any] | None = None) -> int:
     """Insert Race rows from config/races.yaml for race ids missing in the DB (never updates existing
-    rows: the bootstrap owns those). Returns rows inserted. Lets ratings land before bootstrap runs."""
+    rows: the bootstrap owns those). Returns rows inserted. Lets ratings land before bootstrap runs.
+
+    ``exclusive`` / ``exhaustive`` are always inserted as NULL: they may only come from a relationships
+    fetch (scripts/bootstrap_races.py), never from flags left in races.yaml."""
     data = data if data is not None else load_races_yaml()
     races = data.get("races") or {}
     if not isinstance(races, Mapping):
@@ -827,6 +895,7 @@ def ensure_race_rows(session_factory: SessionFactory, data: Mapping[str, Any] | 
             vals = race_row_values(str(rid), entry if isinstance(entry, Mapping) else None)
             if vals is None:
                 continue
+            vals["exclusive"] = vals["exhaustive"] = None
             s.add(Race(**vals))
             existing.add(rid)
             n += 1

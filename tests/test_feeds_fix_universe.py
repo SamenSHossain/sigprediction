@@ -82,6 +82,47 @@ def test_nebraska_senate_candidates_mark_the_empty_democratic_leg(db):
     assert set(cands) == {"R", "I"}
 
 
+async def test_nebraska_democratic_leg_gets_no_two_party_fair(db, cfg):
+    """The reviewer's F6 scenario end to end (fixed on the fairvalue side; this pins it)."""
+    await P.run_once(dbengine.session, cfg, None, now=NOW, fetch_web=False, fetch_fec=False)
+    with dbengine.session() as s:
+        s.add(GenericBallot(source="rcp", ts=NOW, margin=8.0))
+    views = {
+        f"SEN-NE-{p}": MarketView(exchange_id=f"SEN-NE-{p}", race_id="SEN-NE", party=p, chamber="", state=None) for p in "DRI"
+    }
+    with dbengine.session() as s:
+        fv = FV.compute_all(s, cfg, views, NOW)
+    d = fv.get("SEN-NE-D")
+    assert d is None or d.fair <= 0.05, d
+
+
+# ---------------------------------------------------------------------------------------------
+# reviewer coverage note: state-name substring collisions in the crosswalk
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("race_id", "title"),
+    [
+        ("SEN-VA", "Will the Democratic Party win the West Virginia Senate race in 2026?"),
+        ("SEN-KS", "Will the Democratic Party win the Arkansas Senate race in 2026?"),
+    ],
+)
+def test_crosswalk_rejects_a_state_whose_name_contains_ours(race_id, title):
+    assert U.crosswalk_match_score(race_id, "D", title) == 0.0
+    short = title.replace("Will the Democratic Party win the ", "").replace(" race in 2026?", ": Democratic")
+    assert U.title_contradicts(race_id, "D", short) is True
+
+
+def test_crosswalk_still_accepts_the_right_state():
+    assert U.crosswalk_match_score("SEN-VA", "D", "Will the Democratic Party win the Virginia Senate race in 2026?") > 0.9
+    assert U.crosswalk_match_score("SEN-WV", "D", "Will the Democratic Party win the West Virginia Senate race in 2026?") > 0.9
+    assert U.crosswalk_match_score("SEN-AR", "D", "Will the Democratic Party win the Arkansas Senate race in 2026?") > 0.9
+    assert U.title_contradicts("SEN-VA", "D", "Virginia Senate: Democratic") is False
+    assert U.title_contradicts("SEN-KS", "D", "Kansas Senate: Democratic") is False
+    assert U.crosswalk_match_score("HOUSE-VA-02", "D", "Will the Democratic Party win Virginia's 2nd district House race in 2026?") > 0.5
+
+
 # ---------------------------------------------------------------------------------------------
 # F9: party fallback in normalize_rating
 # ---------------------------------------------------------------------------------------------

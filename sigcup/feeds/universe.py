@@ -512,6 +512,12 @@ _PARTY_TITLE_WORDS = {
 }
 
 
+def _state_names_in(text: str) -> set[str]:
+    """Full state names in `text`, lower-cased, matched as whole names (longest first), so
+    'West Virginia' never counts as Virginia and 'Arkansas' never as Kansas."""
+    return {m.group(1).lower() for m in _STATE_NAME_RE.finditer(text)}
+
+
 def title_similarity(a: str, b: str) -> float:
     """Case-insensitive SequenceMatcher ratio in [0, 1]."""
     return difflib.SequenceMatcher(None, _clean_title(a).lower(), _clean_title(b).lower()).ratio()
@@ -553,10 +559,11 @@ def crosswalk_match_score(race_id: str, party: str, title: str) -> float:
         return 0.5 + 0.5 * title_similarity(expected_title(race_id, party), title)
     st_name = state_name(key.state or "").lower()
     st_code = (key.state or "").lower()
+    names = _state_names_in(low)
     if key.chamber == "house":
         d = key.district or ""
         dnum = str(int(d)) if d.isdigit() else "at-large"
-        has_state = st_name in low or re.search(rf"\b{st_code}[-\s]?0?{dnum}\b", low) is not None
+        has_state = st_name in names or re.search(rf"\b{st_code}[-\s]?0?{dnum}\b", low) is not None
         has_district = (
             re.search(rf"\b{st_code}[-\s]?0?{dnum}\b", low) is not None
             or re.search(rf"\b{dnum}(?:st|nd|rd|th)?\s+(?:congressional\s+)?district\b", low) is not None
@@ -568,7 +575,7 @@ def crosswalk_match_score(race_id: str, party: str, title: str) -> float:
         if not re.search(r"\bhouse\b|\bcongressional\b|\bdistrict\b", low):
             return 0.0
     else:
-        if st_name not in low:
+        if st_name not in names:
             return 0.0
         if key.chamber == "senate" and not re.search(r"\bsenate\b|\bsenator\b", low):
             return 0.0
@@ -947,8 +954,8 @@ def title_contradicts(race_id: str, party: str, title: str | None) -> bool:
         other = "house" if which == "senate" else "senate"
         return bool(re.search(rf"\b{other}\b", low)) and not re.search(rf"\b{which}\b", low)
     st_name = state_name(key.state or "").lower()
-    found = _STATE_NAME_RE.search(low)
-    if found and found.group(1).lower() != st_name and st_name not in low:
+    names = _state_names_in(low)
+    if names and st_name not in names:
         return True
     if key.chamber == "senate" and re.search(r"\bgovernor|\bgubernatorial|\bhouse\b", low) and "senate" not in low:
         return True

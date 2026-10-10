@@ -6,7 +6,8 @@ each entry a channel id ``UC...`` or ``{id, race_id}``). A channel's uploads pla
 (``UU`` + channel id tail), listed with ``playlistItems.list`` (1 quota unit) and each recent video's
 newest comments are read with ``commentThreads.list`` (1 unit per page of up to 100). ``search.list``
 costs 100 units and is never used; a run is capped at ``max_units`` so the 10,000 units/day default
-quota is never exhausted by one process.
+quota is never exhausted by one process. Channels are read round-robin from a KV cursor
+(``youtube:cursor``), so a list longer than one run's budget is still covered over successive runs.
 
 Post rows: ``post_id`` = ``youtube:<comment id>``, ``text`` = the comment, ``url`` deep-links the comment,
 ``author_handle`` = display name, ``author_id`` = the commenter's channel id. Comments on a race-specific
@@ -24,6 +25,7 @@ from typing import Any
 import httpx
 
 from sigcup.common.time import utc_now
+from sigcup.db.repo import kv_get, kv_set
 from sigcup.feeds.nlp.gazetteer import (
     Gazetteer,
     PostDraft,
@@ -31,7 +33,7 @@ from sigcup.feeds.nlp.gazetteer import (
     parse_ts,
     pick,
     strip_html,
-    write_posts,
+    write_posts_async,
 )
 from sigcup.settings import Secrets, StrategyConfig
 
@@ -43,6 +45,7 @@ MAX_UNITS_PER_RUN = 200
 MAX_VIDEOS_PER_CHANNEL = 5
 MAX_VIDEO_AGE_DAYS = 14
 COMMENTS_PER_PAGE = 100
+KV_CURSOR = "youtube:cursor"
 
 
 def load_sources() -> dict[str, Any]:
@@ -168,15 +171,19 @@ async def run_once(
         return 0
     gazetteer = gazetteer or load_gazetteer(session_factory)
     cutoff = now - timedelta(days=max_video_age_days)
+    with session_factory() as s:
+        cursor = int(kv_get(s, KV_CURSOR, 0) or 0) % len(channels)
     owns = http is None
     client = http or httpx.AsyncClient()
     units = 0
     total = 0
+    read = 0
     try:
-        for channel_id, race_id in channels:
+        for channel_id, race_id in channels[cursor:] + channels[:cursor]:
             if units >= max_units:
                 break
             units += 1
+            read += 1
             playlist = await _get(
                 client,
                 "playlistItems",
@@ -204,9 +211,11 @@ async def run_once(
                 if threads is None:
                     continue
                 drafts = parse_comment_threads(threads, video, race_id=race_id, now=now)
-                total += write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+                total += await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
     finally:
         if owns:
             await client.aclose()
-    log.info("youtube: %d channels, %d quota units, %d new posts", len(channels), units, total)
+        with session_factory() as s:
+            kv_set(s, KV_CURSOR, (cursor + read) % len(channels))
+    log.info("youtube: %d/%d channels, %d quota units, %d new posts", read, len(channels), units, total)
     return total

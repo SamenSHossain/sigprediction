@@ -31,7 +31,7 @@ from sigcup.feeds.nlp.gazetteer import (
     load_gazetteer,
     parse_ts,
     pick,
-    write_posts,
+    write_posts_async,
 )
 from sigcup.settings import Secrets, StrategyConfig
 
@@ -166,7 +166,7 @@ async def run_once(
         cursor = int(kv_get(s, KV_CURSOR, 0) or 0) % len(subs)
     picked = [subs[(cursor + i) % len(subs)] for i in range(min(max_subs, len(subs)))]
     drafts = await asyncio.to_thread(collect_sync, reddit, picked, now=now)
-    n = write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+    n = await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
     with session_factory() as s:
         kv_set(s, KV_CURSOR, (cursor + len(picked)) % len(subs))
     log.info("reddit: %d subs, %d items, %d new posts", len(picked), len(drafts), n)

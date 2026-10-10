@@ -21,9 +21,16 @@ from sigcup.feeds.nlp.gazetteer import Gazetteer
 from sigcup.settings import Secrets
 from tests.test_social_helpers import NOW, load_json, load_text, make_gazetteer
 
+# Every credential blank unless a test passes it: pydantic-settings would otherwise read exported
+# BLUESKY_* / X_* / ... variables and a test could log in to a live service.
+NO_CREDENTIALS: dict[str, str] = {
+    "anthropic_api_key": "", "x_vendor": "none", "x_vendor_key": "", "bluesky_handle": "", "bluesky_app_password": "",
+    "youtube_api_key": "", "reddit_client_id": "", "reddit_client_secret": "", "reddit_user_agent": "",
+}
+
 
 def secrets(**kw: Any) -> Secrets:
-    return Secrets(_env_file=None, **kw)
+    return Secrets(_env_file=None, **{**NO_CREDENTIALS, **kw})
 
 
 def all_posts() -> dict[str, Post]:

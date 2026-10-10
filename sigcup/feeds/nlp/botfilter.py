@@ -2,9 +2,14 @@
 
 ``score(post)`` is monotone in every risk factor: a younger account, a higher posting rate, more
 duplicates of the same text, or a more bot-like handle never *lowers* the score. The components are
-additive and clamped, so a single strong signal (e.g. 50 identical posts) is enough to cross the 0.7
-threshold that features.py uses to drop a post from stance shares. No network, no DB: the caller
-supplies the two counts that need a query (``dup_count``, ``author_posts_24h``).
+additive and clamped; it takes several signals together (a young account posting duplicates at a high
+rate from a numbered handle) to cross the 0.7 threshold that features.py uses to drop a post.
+
+The score is computed once, at ingest, from the counts known then: the first copies of a copy-paste
+campaign score as originals and duplication alone tops out at +0.40. Coordinated duplicates are
+therefore handled at aggregation time instead (features.py counts a heavily duplicated text once per
+platform, race and day). No network, no DB: the caller supplies the two counts that need a query
+(``dup_count``, ``author_posts_24h``).
 """
 
 from __future__ import annotations

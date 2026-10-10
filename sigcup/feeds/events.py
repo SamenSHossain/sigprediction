@@ -3,15 +3,21 @@ spikes into Event rows, classified soft/hard/unknown by an LLM call with the rac
 
 Two triggers, evaluated for the current UTC day on every ``run_once``:
 
-* **social spike** - ``|z_score| >= spike_z`` on at least ``min_platforms`` distinct platforms the same
-  day (negative spikes matter as much as positive ones: a leader's crowd turning is the signal);
-* **GDELT volume** - today's gdelt Post count for the race exceeds ``GDELT_RATIO`` x the trailing
-  ``baseline_days`` daily mean (and at least ``GDELT_MIN_ARTICLES`` articles).
+* **social spike** - ``|z_score| >= spike_z`` with at least ``MIN_SPIKE_POSTS`` posts on at least
+  ``min_platforms`` distinct platforms the same day (negative spikes matter as much as positive ones:
+  a leader's crowd turning is the signal). Today is a partial UTC day, so a z from a handful of
+  early posts is noise, not a spike;
+* **GDELT volume** - today's gdelt Post count for the race exceeds ``GDELT_RATIO`` x the daily mean
+  over the baseline days the collector fully covered (``news_gdelt.KV_COVERED_SINCE``; at least
+  ``GDELT_MIN_BASELINE_DAYS`` of them) and is at least ``GDELT_MIN_ARTICLES`` articles.
 
-Each trigger yields at most one Event per (race, source, day). ``kind`` comes from an LLM given the
-race context and the day's top posts (hard = dropout, indictment, major endorsement, ballot ruling,
-health; soft = a poll, a debate take, an ad, fundraising, chatter); without an API key or on any
-failure the kind is ``unknown``. Events are written with ``acted=False``; the trader decides.
+A GDELT trigger yields at most one Event per (race, day). A social trigger yields one per (race, day)
+unless a later one the same day is materially stronger (more platforms, or ``RESPIKE_FACTOR`` x the
+recorded |z|), so an early soft blip cannot hide the afternoon's real news. ``kind`` comes from an
+LLM given the race context and the day's top posts for that race (hard = dropout, indictment, major
+endorsement, ballot ruling, health; soft = a poll, a debate take, an ad, fundraising, chatter);
+without an API key or on any failure the kind is ``unknown``. Events are written with
+``acted=False``; the trader decides.
 """
 
 from __future__ import annotations
@@ -23,10 +29,12 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 
 from sigcup.common.time import ensure_utc, utc_now
 from sigcup.db.models import Event, Feature, Post
+from sigcup.db.repo import kv_get, kv_set
+from sigcup.feeds.news_gdelt import KV_COVERED_SINCE
 from sigcup.feeds.nlp.gazetteer import Gazetteer, load_gazetteer, pick
 from sigcup.feeds.nlp.stance import _make_client, response_text
 from sigcup.settings import Secrets, StrategyConfig
@@ -38,7 +46,12 @@ SOURCE_GDELT = "gdelt_volume"
 KINDS = ("soft", "hard", "unknown")
 GDELT_RATIO = 3.0
 GDELT_MIN_ARTICLES = 5
+GDELT_MIN_BASELINE_DAYS = 3
+MIN_SPIKE_POSTS = 20  # posts behind a platform's z before it can count towards a social spike
+RESPIKE_FACTOR = 2.0  # a second social spike the same day needs this x the recorded |z| (or more platforms)
+KV_SOCIAL_PREFIX = "events:social:"
 TOP_POSTS = 8
+TOP_POSTS_SCAN = 400
 
 Classifier = Callable[[Mapping[str, Any], list[str], str], Awaitable[tuple[str, str, float]]]
 """``async (race_context, top_posts, trigger_summary) -> (kind, description, confidence)``."""
@@ -60,12 +73,13 @@ SYSTEM_PROMPT = (
 
 
 def detect_social_spikes(
-    features: Iterable[Feature], spike_z: float, min_platforms: int
+    features: Iterable[Feature], spike_z: float, min_platforms: int, *, min_posts: int = MIN_SPIKE_POSTS
 ) -> dict[str, list[Feature]]:
-    """``{race_id: [Feature...]}`` for races whose |z| >= spike_z on >= min_platforms platforms."""
+    """``{race_id: [Feature...]}`` for races whose |z| >= spike_z on >= min_platforms platforms, each
+    with at least ``min_posts`` posts behind it."""
     by_race: dict[str, dict[str, Feature]] = {}
     for f in features:
-        if f.z_score is None or abs(f.z_score) < spike_z:
+        if f.z_score is None or abs(f.z_score) < spike_z or (f.n_posts or 0) < min_posts:
             continue
         by_race.setdefault(f.race_id, {})[f.platform] = f
     return {rid: list(v.values()) for rid, v in by_race.items() if len(v) >= max(1, min_platforms)}
@@ -78,23 +92,33 @@ def detect_gdelt_spikes(
     *,
     ratio: float = GDELT_RATIO,
     min_articles: int = GDELT_MIN_ARTICLES,
+    covered_since: Mapping[str, str] | None = None,
+    min_days: int = GDELT_MIN_BASELINE_DAYS,
 ) -> dict[str, tuple[int, float]]:
     """``{race_id: (today_count, trailing_mean)}`` where today > ratio x the trailing daily mean.
 
-    ``counts`` maps (race_id, 'YYYY-MM-DD') -> article count. Days with no articles count as 0 in the
-    mean (a quiet race that suddenly gets 5 articles is a spike); at least two baseline days are needed.
+    ``counts`` maps (race_id, 'YYYY-MM-DD') -> article count. Only baseline days the collector fully
+    covered enter the mean: from ``covered_since[race_id]`` on (recorded by news_gdelt; authoritative)
+    or, when nothing is recorded, from the day after the race's first article (that first day is
+    usually the partial backfill of the collector's first query). A covered day without articles
+    counts as 0 (a quiet race that suddenly gets 5 articles is a spike); at least ``min_days``
+    covered baseline days are needed.
     """
     t = datetime.strptime(today, "%Y-%m-%d")
     base_days = [(t - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, baseline_days + 1)]
-    races = {rid for rid, _day in counts}
+    first_seen: dict[str, str] = {}
+    for rid, d in counts:
+        if d < first_seen.get(rid, "9999-12-31"):
+            first_seen[rid] = d
     out: dict[str, tuple[int, float]] = {}
-    for rid in races:
+    for rid, first in first_seen.items():
         today_n = counts.get((rid, today), 0)
         if today_n < min_articles:
             continue
-        hist = [counts.get((rid, d), 0) for d in base_days]
-        seen_days = sum(1 for d in base_days if (rid, d) in counts)
-        if len(hist) < 2 or seen_days < 1:
+        recorded = (covered_since or {}).get(rid)
+        start = str(recorded) if recorded else (datetime.strptime(first, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        hist = [counts.get((rid, d), 0) for d in base_days if d >= start]
+        if len(hist) < max(1, min_days):
             continue
         mean = sum(hist) / len(hist)
         if today_n > ratio * max(mean, 1e-9):
@@ -183,17 +207,29 @@ async def fallback_classifier(race_context: Mapping[str, Any], top_posts: list[s
 
 
 def _top_posts(s: Any, race_id: str, day_start: datetime, limit: int = TOP_POSTS) -> list[str]:
+    """The race's posts of the day, filtered by race in SQL before any limit, lowest bot score first,
+    then taken round-robin across platforms so the 0.0-scored news rows cannot crowd out social posts."""
+    token = '"' + race_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + '"'
     rows = (
-        s.execute(select(Post).where(Post.ts >= day_start).order_by(Post.bot_score.asc().nulls_last(), Post.ts.desc()).limit(400))
+        s.execute(
+            select(Post)
+            .where(Post.ts >= day_start, cast(Post.race_ids, String).like(f"%{token}%", escape="\\"))
+            .order_by(Post.bot_score.asc().nulls_last(), Post.ts.desc())
+            .limit(TOP_POSTS_SCAN)
+        )
         .scalars()
         .all()
     )
-    out: list[str] = []
+    by_platform: dict[str, list[str]] = {}
     for p in rows:
         if race_id in (p.race_ids or []):
-            out.append(f"[{p.platform}] {(p.text or '')[:280]}")
-            if len(out) >= limit:
-                break
+            by_platform.setdefault(p.platform, []).append(f"[{p.platform}] {(p.text or '')[:280]}")
+    queues = list(by_platform.values())
+    out: list[str] = []
+    while len(out) < limit and any(queues):
+        for q in queues:
+            if q and len(out) < limit:
+                out.append(q.pop(0))
     return out
 
 
@@ -202,6 +238,19 @@ def _already_flagged(s: Any, race_id: str, source: str, day_start: datetime) -> 
         select(Event.id).where(Event.race_id == race_id, Event.source == source, Event.ts >= day_start).limit(1)
     ).first()
     return row is not None
+
+
+def _may_flag(s: Any, race_id: str, source: str, day_start: datetime, strength: tuple[int, float] | None) -> bool:
+    """No Event for (race, source) today yet, or a social trigger materially stronger than the recorded one."""
+    if not _already_flagged(s, race_id, source, day_start):
+        return True
+    if strength is None:
+        return False
+    prev = kv_get(s, KV_SOCIAL_PREFIX + race_id)
+    if not isinstance(prev, Mapping) or prev.get("day") != day_start.strftime("%Y-%m-%d"):
+        return False
+    platforms, zmax = strength
+    return platforms > int(prev.get("platforms") or 0) or zmax >= RESPIKE_FACTOR * float(prev.get("zmax") or 0.0)
 
 
 async def run_once(
@@ -214,7 +263,8 @@ async def run_once(
     client: Any | None = None,
     gazetteer: Gazetteer | None = None,
 ) -> int:
-    """Detect today's spikes and write Event rows (one per race/source/day). Returns rows written."""
+    """Detect today's spikes and write Event rows (one per race/source/day, plus a materially stronger
+    social re-spike). Returns rows written."""
     now = now or utc_now()
     day = now.strftime("%Y-%m-%d")
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -229,20 +279,25 @@ async def run_once(
         social = detect_social_spikes(feats, sent.spike_z, sent.min_platforms)
         since = day_start - timedelta(days=sent.baseline_days)
         gposts = s.execute(select(Post).where(Post.platform == "gdelt", Post.ts >= since)).scalars().all()
-        gdelt = detect_gdelt_spikes(gdelt_counts(gposts), day, sent.baseline_days)
+        covered = kv_get(s, KV_COVERED_SINCE)
+        gdelt = detect_gdelt_spikes(
+            gdelt_counts(gposts), day, sent.baseline_days, covered_since=covered if isinstance(covered, Mapping) else None
+        )
 
-    triggers: list[tuple[str, str, str, float]] = []  # race_id, source, summary, prior confidence
+    # race_id, source, summary, prior confidence, strength (platforms, max |z|) for social triggers
+    triggers: list[tuple[str, str, str, float, tuple[int, float] | None]] = []
     for rid, fs in social.items():
         parts = ", ".join(f"{f.platform} z={f.z_score:+.1f} (n={f.n_posts})" for f in sorted(fs, key=lambda f: f.platform))
         zmax = max(abs(f.z_score or 0.0) for f in fs)
-        triggers.append((rid, SOURCE_SOCIAL, f"stance spike on {len(fs)} platforms: {parts}", min(0.9, 0.4 + 0.1 * zmax)))
+        summary = f"stance spike on {len(fs)} platforms: {parts}"
+        triggers.append((rid, SOURCE_SOCIAL, summary, min(0.9, 0.4 + 0.1 * zmax), (len(fs), zmax)))
     for rid, (today_n, mean) in gdelt.items():
-        triggers.append((rid, SOURCE_GDELT, f"news volume {today_n} articles vs trailing mean {mean:.1f}/day", 0.5))
+        triggers.append((rid, SOURCE_GDELT, f"news volume {today_n} articles vs trailing mean {mean:.1f}/day", 0.5, None))
 
     written = 0
-    for rid, source, summary, prior in triggers:
+    for rid, source, summary, prior, strength in triggers:
         with session_factory() as s:
-            if _already_flagged(s, rid, source, day_start):
+            if not _may_flag(s, rid, source, day_start, strength):
                 continue
             top = _top_posts(s, rid, day_start)
         try:
@@ -253,8 +308,10 @@ async def run_once(
         if kind not in KINDS:
             kind = "unknown"
         with session_factory() as s:
-            if _already_flagged(s, rid, source, day_start):
+            if not _may_flag(s, rid, source, day_start, strength):
                 continue
+            if strength is not None:
+                kv_set(s, KV_SOCIAL_PREFIX + rid, {"day": day, "platforms": strength[0], "zmax": round(strength[1], 3)})
             s.add(
                 Event(
                     ts=now,

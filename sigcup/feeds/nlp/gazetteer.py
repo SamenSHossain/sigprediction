@@ -20,15 +20,31 @@ Linking rules (confidence in parentheses):
 
 Collisions: a surname shared by candidates in several races is linked only to the race whose state
 token co-occurs; same-state collisions additionally need a chamber token (Senate / Governor /
-district). Surnames that are common English words ("Young", "Hill") never match on their own.
+district). Surnames that are common English words ("Young", "Hill", "Moody") never match on their own.
+
+Precision rules (two-letter state codes are English words - or, ok, me, co, hi - and surnames collide):
+
+* race codes need an UPPER-CASE state code glued to the chamber or district by a hyphen or nothing
+  (``OR-Sen``, ``ORSen``, ``ME-02``, ``ME02``, ``ME-2``); hashtags (``#orsen``) stay case-insensitive.
+  "house or senate", "ok senate", "me 2" and "co 8" are not codes;
+* "<State> Senate" is a code only as "<State> Senate race/debate/seat/..." or "<State> U.S. Senate"
+  (a bare "Georgia Senate" is usually the state legislature); "8th district" without the state is
+  only evidence for a surname, never a code on its own;
+* surname-only matches are case-sensitive (``Moody``/``MOODY``, never ``moody``) and use the whole
+  particle surname (``De La Cruz``, ``Van Orden``); well-known namesakes (``Ted Cruz``,
+  ``Tom Perez`` ...) are masked before surnames are matched;
+* "Washington" alone is not Washington-state evidence (it usually means DC): ``Washington state``,
+  ``Washington's 3rd``, ``southwest Washington`` and ``#WApol`` / ``WA-03`` are.
 """
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections import Counter
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -72,8 +88,19 @@ COMMON_WORD_SURNAMES: frozenset[str] = frozenset(
         "cross", "ball", "bird", "fisher", "miller", "carpenter", "mason", "smith", "frost", "snow",
         "summers", "winters", "cotton", "rice", "berry", "lamb", "hart", "star", "peace", "power",
         "pence", "sanders", "walker", "porter", "hunter", "marsh", "lake", "rivers", "brooks", "burns",
+        # capitalised often enough in headlines ("Moody's", "New Figures Show ...") to need the full name
+        "moody", "mills", "rounds", "figures",
     }
 )
+
+# Well-known people who share a 2026 candidate's surname; masked before surname-only matching.
+FAMOUS_NAMESAKES: tuple[str, ...] = (
+    "Ted Cruz", "Rafael Cruz", "Tom Perez", "Thomas Perez", "Anderson Cooper", "Ben Shapiro",
+    "Rick Perry", "Bernie Sanders", "Andrew Jackson", "Jesse Jackson", "Ketanji Brown Jackson", "John Warner",
+)
+
+# Lower-case name particles that start a multi-token surname (Monica De La Cruz -> "De La Cruz").
+NAME_PARTICLES: frozenset[str] = frozenset({"de", "del", "della", "der", "den", "di", "da", "du", "la", "le", "van", "von", "st", "st."})
 
 PARTY_ALIASES = {"D": "D", "DEM": "D", "DEMOCRAT": "D", "DEMOCRATIC": "D", "R": "R", "REP": "R", "GOP": "R",
                  "REPUBLICAN": "R", "I": "I", "IND": "I", "INDEPENDENT": "I"}
@@ -88,6 +115,16 @@ CONF_RACE_CODE = 0.50
 
 _ORDINAL = r"(?:st|nd|rd|th)"
 _DAY = timedelta(days=1)
+_IN_CHUNK = 500  # bound on bound parameters per IN (...) query
+# what follows "<State> Senate" when it means the federal race rather than the state legislature
+_RACE_WORDS = (
+    r"(?:race|races|debate|debates|seat|contest|campaign|candidates?|nominees?|nomination|polls?|polling"
+    r"|election|matchup|showdown|primary|runoff)"
+)
+_NAMESAKE_RE = re.compile(
+    "|".join(rf"(?<!\w){r'\W{1,3}'.join(re.escape(t) for t in n.split())}(?!\w)" for n in FAMOUS_NAMESAKES),
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -204,7 +241,11 @@ class Candidate:
 
     @property
     def surname(self) -> str:
+        """Last token, or from the first name particle on (``Monica De La Cruz`` -> ``De La Cruz``)."""
         toks = [t for t in re.split(r"\s+", self.name.strip()) if t]
+        for i in range(1, len(toks) - 1):
+            if toks[i].lower() in NAME_PARTICLES:
+                return " ".join(toks[i:])
         return toks[-1] if toks else ""
 
 
@@ -255,38 +296,73 @@ def _full_name_regex(name: str) -> re.Pattern[str] | None:
     return re.compile(rf"(?<![\w@#]){first}(?:\W{{1,3}}\w+\.?){{0,2}}\W{{1,3}}{last}(?!\w)", re.IGNORECASE)
 
 
+def _state_name_regex(st: str, name: str) -> re.Pattern[str]:
+    """The state's name as surname evidence; bare "Washington" usually means DC, so WA needs a qualifier."""
+    if st == "WA":
+        return re.compile(
+            rf"(?<!\w)(?:Washington(?:\s+state|'s\s+\d+{_ORDINAL})|(?:south|north)?(?:east|west)(?:ern)?\s+Washington"
+            r"|central\s+Washington)(?!\w)",
+            re.IGNORECASE,
+        )
+    return re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE)
+
+
 def _race_token_regexes(meta: RaceMeta) -> tuple[list[re.Pattern[str]], list[re.Pattern[str]]]:
     """``(evidence, codes)``: *evidence* patterns identify the race's state (enough to disambiguate a
-    surname); *codes* identify this specific race and chamber (``#GASen``, ``GA-Gov``, ``PA-08``)."""
+    surname); *codes* identify this specific race and chamber (``#GASen``, ``GA-Gov``, ``PA-08``).
+
+    Code forms need the upper-case state code glued to the chamber or district (two-letter codes
+    such as OR, OK, ME, CO, HI are English words); hashtags stay case-insensitive.
+    """
     st = (meta.state or "").upper()
     if not st:
         return [], []
     evidence: list[re.Pattern[str]] = []
     codes: list[re.Pattern[str]] = []
     name = STATE_NAMES.get(st)
+    sname = re.escape(name) if name else None
     if name:
-        evidence.append(re.compile(rf"(?<!\w){re.escape(name)}(?!\w)", re.IGNORECASE))
+        evidence.append(_state_name_regex(st, name))
     evidence.append(re.compile(rf"(?<![\w@])#{st}(?:pol|politics)(?!\w)", re.IGNORECASE))
     if meta.chamber == "senate":
         codes.append(re.compile(rf"(?<![\w@])#{st}sen(?:ate)?(?!\w)", re.IGNORECASE))
-        codes.append(re.compile(rf"(?<![\w@#]){st}[\s-]?(?:sen|senate)(?!\w)", re.IGNORECASE))
-        if name:
-            codes.append(re.compile(rf"(?<!\w){re.escape(name)}\s+(?:senate|senator|u\.?s\.? senate)(?!\w)", re.IGNORECASE))
+        codes.append(re.compile(rf"(?<![\w@#]){st}-?(?i:sen|senate)(?!\w)"))
+        if sname:
+            codes.append(
+                re.compile(rf"(?<!\w){sname}(?:'s)?\s+(?:u\.?s\.?\s+senate|senate\s+{_RACE_WORDS})(?!\w)", re.IGNORECASE)
+            )
     elif meta.chamber == "governor":
         codes.append(re.compile(rf"(?<![\w@])#{st}gov(?:ernor)?(?!\w)", re.IGNORECASE))
-        codes.append(re.compile(rf"(?<![\w@#]){st}[\s-]?(?:gov|governor)(?!\w)", re.IGNORECASE))
-        if name:
-            codes.append(re.compile(rf"(?<!\w){re.escape(name)}\s+(?:governor|gubernatorial)(?!\w)", re.IGNORECASE))
+        codes.append(re.compile(rf"(?<![\w@#]){st}-?(?i:gov|governor)(?!\w)"))
+        if sname:
+            codes.append(re.compile(rf"(?<!\w){sname}\s+(?:governor|gubernatorial)(?!\w)", re.IGNORECASE))
     elif meta.chamber == "house":
         d = (meta.district or "").upper().lstrip("0") or "AL"
         if d == "AL":
-            codes.append(re.compile(rf"(?<![\w@#]){st}[\s-]?AL(?!\w)", re.IGNORECASE))
+            codes.append(re.compile(rf"(?<![\w@#]){st}-AL(?!\w)"))
         else:
-            codes.append(re.compile(rf"(?<![\w@#]){st}[\s-]?0?{d}(?!\d)", re.IGNORECASE))
+            codes.append(re.compile(rf"(?<![\w@#]){st}(?:-0?{d}|{d.zfill(2)})(?!\d)"))
             codes.append(re.compile(rf"(?<![\w@])#{st}0?{d}(?!\d)", re.IGNORECASE))
-            codes.append(re.compile(rf"(?<!\w){d}{_ORDINAL}\s+(?:congressional\s+)?district(?!\w)", re.IGNORECASE))
+            if sname:
+                codes.append(
+                    re.compile(rf"(?<!\w){sname}(?:'s)?\s+{d}{_ORDINAL}\s+(?:congressional\s+)?district(?!\w)", re.IGNORECASE)
+                )
+            # "the 8th district" names no state: enough to back a surname, never a link on its own
+            evidence.append(re.compile(rf"(?<!\w){d}{_ORDINAL}\s+(?:congressional\s+)?district(?!\w)", re.IGNORECASE))
             evidence.append(re.compile(rf"(?<!\w)district\s+0?{d}(?!\d)", re.IGNORECASE))
     return evidence, codes
+
+
+def _surname_regex(surname: str) -> re.Pattern[str]:
+    """Case-sensitive surname match: ``Ossoff`` / ``OSSOFF`` but never ``ossoff``; particles any case."""
+    parts: list[str] = []
+    for tok in surname.split():
+        if tok.lower() in NAME_PARTICLES:
+            parts.append(f"(?i:{re.escape(tok)})")
+        else:
+            forms = dict.fromkeys((tok, tok[:1].upper() + tok[1:], tok.upper()))
+            parts.append("(?:" + "|".join(re.escape(f) for f in forms) + ")")
+    return re.compile(rf"(?<![\w@#]){r'\s+'.join(parts)}(?!\w)")
 
 
 def _chamber_token_regex(meta: RaceMeta) -> re.Pattern[str] | None:
@@ -390,6 +466,7 @@ class Gazetteer:
         self._handles: dict[str, Candidate] = {}
         self._tags: dict[str, Candidate] = {}
         self._surname: dict[str, list[Candidate]] = {}
+        surname_forms: dict[str, str] = {}
         self._race_tokens: dict[str, list[re.Pattern[str]]] = {}
         self._chamber_tokens: dict[str, re.Pattern[str] | None] = {}
         self._race_handles: dict[str, set[str]] = {}
@@ -410,15 +487,14 @@ class Gazetteer:
             sn = c.surname.lower()
             if sn and len(sn) >= 3:
                 self._surname.setdefault(sn, []).append(c)
+                surname_forms.setdefault(sn, c.surname)
         self._race_codes: dict[str, list[re.Pattern[str]]] = {}
         for rid, meta in self.races.items():
             evidence, codes = _race_token_regexes(meta)
             self._race_tokens[rid] = evidence + codes
             self._race_codes[rid] = codes
             self._chamber_tokens[rid] = _chamber_token_regex(meta)
-        self._surname_re: dict[str, re.Pattern[str]] = {
-            sn: re.compile(rf"(?<![\w@#]){re.escape(sn)}(?!\w)", re.IGNORECASE) for sn in self._surname
-        }
+        self._surname_re: dict[str, re.Pattern[str]] = {sn: _surname_regex(form) for sn, form in surname_forms.items()}
         self._handle_re = re.compile(r"(?<!\w)@([A-Za-z0-9_]{1,30})")
         self._tag_re = re.compile(r"(?<!\w)#([A-Za-z0-9_]{1,60})")
 
@@ -483,9 +559,10 @@ class Gazetteer:
             if c is not None:
                 hit(c, c.race_id, CONF_HASHTAG)
 
-        # Surname-only: needs a race token (or a race handle) for the specific race.
+        # Surname-only: needs a race token (or a race handle) for the specific race; namesakes masked.
+        surname_text = _NAMESAKE_RE.sub(" ", text)
         for sn, cands in self._surname.items():
-            if sn in COMMON_WORD_SURNAMES or not self._surname_re[sn].search(text):
+            if sn in COMMON_WORD_SURNAMES or not self._surname_re[sn].search(surname_text):
                 continue
             eligible = [c for c in cands if (c.race_id, c.party) not in best]
             eligible = [c for c in eligible if self._race_evidence(c.race_id, text, author_handle)]
@@ -567,6 +644,11 @@ class PostDraft:
     link_text: str | None = None  # extra context for the gazetteer (video title, feed name) not stored as text
 
 
+def _chunks(items: Sequence[Any], size: int = _IN_CHUNK) -> Iterable[Sequence[Any]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
 def write_posts(
     session_factory: Callable[[], Any],
     drafts: Iterable[PostDraft],
@@ -577,17 +659,33 @@ def write_posts(
 ) -> int:
     """Link, bot-score and persist drafts; returns the number of NEW Post rows (existing ids are skipped).
 
-    ``require_link=True`` drops posts that neither the draft nor the gazetteer tie to a race.
+    ``require_link=True`` drops posts that neither the draft nor the gazetteer tie to a race. The bot
+    score's two counts (copies of the text hash, the author's posts on the platform in the trailing
+    24 h, read through the ts index) come from one query each per batch, never one query per draft;
+    earlier drafts of the same batch are added in memory. Synchronous: async collectors call
+    :func:`write_posts_async`.
     """
     now = now or utc_now()
-    written = 0
-    seen_batch: dict[str, int] = {}
+    since = now - _DAY
     with session_factory() as s:
+        fresh: list[PostDraft] = []
+        batch_ids: set[str] = set()
         for d in drafts:
             if not d.post_id or not d.text or not d.text.strip():
                 continue
             pid = d.post_id[:128]
-            if s.get(Post, pid) is not None:
+            if pid not in batch_ids:
+                batch_ids.add(pid)
+                fresh.append(d)
+        ids = sorted(batch_ids)
+        existing: set[str] = set()
+        for chunk in _chunks(ids):
+            existing.update(s.execute(select(Post.post_id).where(Post.post_id.in_(chunk))).scalars())
+
+        kept: list[tuple[PostDraft, str, list[str], str, str | None]] = []
+        for d in fresh:
+            pid = d.post_id[:128]
+            if pid in existing:
                 continue
             race_ids = list(dict.fromkeys(d.race_ids or []))
             if gazetteer is not None:
@@ -597,27 +695,43 @@ def write_posts(
                         race_ids.append(rid)
             if require_link and not race_ids:
                 continue
-            th = text_hash(d.text)
-            dup_db = s.execute(select(func.count()).select_from(Post).where(Post.text_hash == th)).scalar() or 0
-            dup = int(dup_db) + seen_batch.get(th, 0)
-            seen_batch[th] = seen_batch.get(th, 0) + 1
-            rate = 0
-            if d.author_id:
-                rate = int(
-                    s.execute(
-                        select(func.count())
-                        .select_from(Post)
-                        .where(Post.platform == d.platform, Post.author_id == d.author_id, Post.ts >= now - _DAY)
-                    ).scalar()
-                    or 0
-                )
-            score = botfilter.score(d, dup_count=dup, author_posts_24h=rate, now=now)
+            author = (d.author_id or None) and str(d.author_id)[:128]
+            kept.append((d, pid, race_ids, text_hash(d.text), author))
+        if not kept:
+            return 0
+
+        hashes = sorted({th for _d, _pid, _r, th, _a in kept})
+        dup_db: Counter[str] = Counter()
+        for chunk in _chunks(hashes):
+            rows = s.execute(
+                select(Post.text_hash, func.count()).where(Post.text_hash.in_(chunk)).group_by(Post.text_hash)
+            ).all()
+            dup_db.update({th: int(n) for th, n in rows})
+        authors = sorted({a for _d, _pid, _r, _th, a in kept if a})
+        rate_db: Counter[tuple[str, str]] = Counter()
+        for chunk in _chunks(authors):
+            # a ts range (ix_posts_ts) with no platform filter or GROUP BY, so SQLite never walks
+            # ix_posts_platform over a whole platform; the rows are this batch's authors' last day only
+            rows = s.execute(select(Post.platform, Post.author_id).where(Post.ts >= since, Post.author_id.in_(chunk))).all()
+            rate_db.update((plat, aid) for plat, aid in rows)
+
+        dup_batch: Counter[str] = Counter()
+        rate_batch: Counter[tuple[str, str]] = Counter()
+        written = 0
+        for d, pid, race_ids, th, author in kept:
+            platform = d.platform[:16]
+            ts = ensure_utc(d.ts)
+            rate = rate_db[(platform, author)] + rate_batch[(platform, author)] if author else 0
+            score = botfilter.score(d, dup_count=dup_db[th] + dup_batch[th], author_posts_24h=rate, now=now)
+            dup_batch[th] += 1
+            if author and ts >= since:
+                rate_batch[(platform, author)] += 1
             s.add(
                 Post(
                     post_id=pid,
-                    platform=d.platform[:16],
-                    ts=ensure_utc(d.ts),
-                    author_id=(d.author_id or None) and str(d.author_id)[:128],
+                    platform=platform,
+                    ts=ts,
+                    author_id=author,
                     author_handle=(d.author_handle or None) and str(d.author_handle)[:128],
                     author_created_at=ensure_utc(d.author_created_at) if d.author_created_at else None,
                     text=d.text,
@@ -632,3 +746,17 @@ def write_posts(
             written += 1
     return written
 
+
+async def write_posts_async(
+    session_factory: Callable[[], Any],
+    drafts: Iterable[PostDraft],
+    gazetteer: Gazetteer | None = None,
+    *,
+    require_link: bool = True,
+    now: datetime | None = None,
+) -> int:
+    """:func:`write_posts` in a worker thread, so linking and the DB writes never block the feeds event loop."""
+    batch = list(drafts)
+    if not batch:
+        return 0
+    return await asyncio.to_thread(write_posts, session_factory, batch, gazetteer, require_link=require_link, now=now)

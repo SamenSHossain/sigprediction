@@ -10,6 +10,11 @@ whatever the gazetteer links. ``mode=timelinevol`` is exposed as :func:`fetch_ti
 :func:`parse_timelinevol` and stored in KV by :func:`volume_once`; the event detector's primary volume
 measure is simply the count of gdelt Post rows per (race, day).
 
+Coverage: the first time a race's query succeeds, ``run_once`` records in KV (``gdelt:covered_since``,
+``{race_id: 'YYYY-MM-DD'}``) the first UTC day that query fully covers (the midnight at or after
+``query time - timespan``). The event detector only counts days from then on as baseline, so the
+partial backfill day and the days before deployment never read as "zero articles".
+
 Request budget: requests are serialised with ``asyncio.sleep`` (``GDELT_MIN_INTERVAL_S``) and each
 ``run_once`` handles at most ``max_requests`` races, round-robin via a KV cursor, so a 117-race universe
 is swept in two or three 15-minute cycles rather than blocking one cycle for ten minutes.
@@ -20,8 +25,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -35,7 +41,7 @@ from sigcup.feeds.nlp.gazetteer import (
     parse_ts,
     pick,
     strip_html,
-    write_posts,
+    write_posts_async,
 )
 from sigcup.settings import Secrets, StrategyConfig
 
@@ -48,6 +54,7 @@ DEFAULT_TIMESPAN = "1d"
 HTTP_TIMEOUT_S = 30.0
 KV_CURSOR = "gdelt:cursor"
 KV_VOLUME_PREFIX = "gdelt:timelinevol:"
+KV_COVERED_SINCE = "gdelt:covered_since"
 MAX_QUERY_TERMS = 6
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -162,6 +169,35 @@ def _slice(queue: Sequence[Any], cursor: int, n: int) -> tuple[list[Any], int]:
     return picked, (cursor + len(picked)) % len(queue)
 
 
+_TIMESPAN_RE = re.compile(r"^\s*(\d+)\s*(min|minutes?|h|hours?|d|days?|w|weeks?|m|months?)\s*$", re.IGNORECASE)
+
+
+def timespan_delta(timespan: str) -> timedelta:
+    """GDELT ``timespan`` ('15min', '24h', '1d', '1w', '3m') as a timedelta; zero when unparseable."""
+    m = _TIMESPAN_RE.match(str(timespan or ""))
+    if not m:
+        return timedelta(0)
+    n, unit = int(m.group(1)), m.group(2).lower()
+    if unit.startswith("mi"):
+        return timedelta(minutes=n)
+    if unit.startswith("h"):
+        return timedelta(hours=n)
+    if unit.startswith("d"):
+        return timedelta(days=n)
+    if unit.startswith("w"):
+        return timedelta(weeks=n)
+    return timedelta(days=30 * n)
+
+
+def first_full_day(query_time: datetime, timespan: str) -> str:
+    """The first UTC day a query at ``query_time`` reaching back ``timespan`` covers from midnight on."""
+    start = query_time - timespan_delta(timespan)
+    midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    if midnight < start:
+        midnight += timedelta(days=1)
+    return midnight.strftime("%Y-%m-%d")
+
+
 async def collect(
     http: httpx.AsyncClient,
     cfg: StrategyConfig,
@@ -171,8 +207,12 @@ async def collect(
     min_interval_s: float = GDELT_MIN_INTERVAL_S,
     sleep: Sleep = asyncio.sleep,
     now: datetime | None = None,
+    succeeded: list[str] | None = None,
 ) -> list[PostDraft]:
-    """Run the artlist queries serially, ``min_interval_s`` apart, and normalise the articles."""
+    """Run the artlist queries serially, ``min_interval_s`` apart, and normalise the articles.
+
+    Race ids whose query answered are appended to ``succeeded`` when given.
+    """
     drafts: list[PostDraft] = []
     for i, (rid, query) in enumerate(jobs):
         if i:
@@ -180,6 +220,8 @@ async def collect(
         payload = await fetch_artlist(http, cfg.feeds.gdelt_doc, query, timespan=timespan)
         if payload is None:
             continue
+        if succeeded is not None:
+            succeeded.append(rid)
         drafts.extend(parse_artlist(payload, rid, now=now))
     return drafts
 
@@ -208,14 +250,20 @@ async def run_once(
     jobs, next_cursor = _slice(queue, cursor, max_requests)
     owns = http is None
     client = http or httpx.AsyncClient(headers={"User-Agent": "sigcup/0.1 (+research)"})
+    succeeded: list[str] = []
     try:
-        drafts = await collect(client, cfg, jobs, timespan=timespan, sleep=sleep, now=now)
+        drafts = await collect(client, cfg, jobs, timespan=timespan, sleep=sleep, now=now, succeeded=succeeded)
     finally:
         if owns:
             await client.aclose()
-    n = write_posts(session_factory, drafts, gazetteer, require_link=True, now=now)
+    n = await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
     with session_factory() as s:
         kv_set(s, KV_CURSOR, next_cursor)
+        covered = dict(kv_get(s, KV_COVERED_SINCE) or {})
+        first = first_full_day(now, timespan)
+        new = {rid: first for rid in succeeded if rid not in covered}
+        if new:
+            kv_set(s, KV_COVERED_SINCE, {**covered, **new})
     log.info("gdelt: %d races queried, %d articles, %d new posts", len(jobs), len(drafts), n)
     return n
 

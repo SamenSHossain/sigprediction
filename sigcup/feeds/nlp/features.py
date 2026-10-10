@@ -3,7 +3,10 @@
 For every UTC day in the window and every (platform, race_id):
 
 * ``n_posts``        distinct posts with a Stance row, excluding posts with ``bot_score > 0.7`` and
-                     stance rows flagged ``is_news_or_poll`` (headlines carry no opinion);
+                     stance rows flagged ``is_news_or_poll`` (headlines carry no opinion); a text
+                     posted more than ``DUP_COPIES_MAX`` times in the window (a copy-paste campaign)
+                     counts as ONE post per (platform, race, day) - the ingest-time bot score cannot
+                     catch it, since it is fixed when the first copies arrive;
 * ``net_stance_dem`` (support_D + oppose_R - oppose_D - support_R) / n_posts, in [-1, 1];
 * ``z_score``        (net - mean) / max(std, STD_FLOOR) over the days in the trailing
                      ``baseline_days`` window that have data (at least MIN_BASELINE_DAYS of them),
@@ -21,7 +24,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from sigcup.common.time import ensure_utc, utc_now
 from sigcup.db.models import Feature, Post, Stance
@@ -32,6 +35,7 @@ log = logging.getLogger(__name__)
 
 MIN_BASELINE_DAYS = 3
 STD_FLOOR = 0.05
+DUP_COPIES_MAX = 3  # a text_hash seen more often than this in the window counts once per (platform, race, day)
 
 Record = tuple[str, str, str, str, str, str]
 """(platform, race_id, day 'YYYY-MM-DD', post_id, party, stance)."""
@@ -106,19 +110,30 @@ def compute(records: Iterable[Record], baseline_days: int) -> dict[tuple[str, st
 
 
 def load_records(s: Any, since: datetime) -> list[Record]:
-    """Stance rows joined to posts since ``since``; bot-like posts and news/poll items are excluded."""
+    """Stance rows joined to posts since ``since``; bot-like posts and news/poll items are excluded, and
+    a heavily duplicated text (more than ``DUP_COPIES_MAX`` posts in the window) keeps only its earliest
+    post per (platform, race, day)."""
     rows = s.execute(
-        select(Stance.race_id, Stance.party, Stance.stance, Post.post_id, Post.platform, Post.ts)
+        select(Stance.race_id, Stance.party, Stance.stance, Post.post_id, Post.platform, Post.ts, Post.text_hash)
         .join(Post, Stance.post_id == Post.post_id)
         .where(Post.ts >= since, Stance.is_news_or_poll.is_(False))
+        .order_by(Post.ts, Post.post_id)
     ).all()
     bot_scores = dict(s.execute(select(Post.post_id, Post.bot_score).where(Post.ts >= since)).all())
+    heavy = set(
+        s.execute(
+            select(Post.text_hash).where(Post.ts >= since).group_by(Post.text_hash).having(func.count() > DUP_COPIES_MAX)
+        ).scalars()
+    )
+    representative: dict[tuple[str, str, str, str], str] = {}
     out: list[Record] = []
-    for race_id, party, stance, post_id, platform, ts in rows:
+    for race_id, party, stance, post_id, platform, ts, th in rows:
         score = bot_scores.get(post_id)
         if score is not None and score > BOT_THRESHOLD:
             continue
         day = ensure_utc(ts).strftime("%Y-%m-%d")
+        if th in heavy and representative.setdefault((platform, race_id, day, th), post_id) != post_id:
+            continue
         out.append((platform, race_id, day, post_id, party, stance))
     return out
 

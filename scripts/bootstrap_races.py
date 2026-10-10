@@ -12,7 +12,9 @@ Steps (``python scripts/bootstrap_races.py``; see ``--help``):
    ids) is preserved; new races are created from the title.
 3. ``get_relationships``: ``exclusive`` / ``exhaustive`` are set ONLY when a mutually_exclusive group
    covers every SIG leg of the race (exhaustive only when the group is exactly the race's legs and the
-   API says isExhaustive); otherwise they are reset to null. Titles never decide.
+   API says isExhaustive); otherwise they are reset to null. Titles never decide; only an exact
+   exclusivity kind counts and inactive relationships are ignored. Without a successful fetch in this
+   run (--skip-sig, or the call failed) the DB gets NULL flags whatever races.yaml still says.
 4. Crosswalk: Kalshi tickers from the documented patterns, verified by fetching (batch GET
    /markets?tickers=) and rejecting titles that contradict the race; Polymarket via Gamma slug lookups
    then /public-search, accepted only above a title-similarity score. Existing ids are kept.
@@ -209,9 +211,23 @@ def merge_markets(data: dict[str, Any], mapped: Iterable[MappedMarket], *, now: 
 # ---------------------------------------------------------------------------------------------
 
 
+EXCLUSIVE_KINDS = frozenset({"mutually_exclusive", "exclusive", "exactly_one", "at_most_one", "one_of"})
+
+
 def _is_exclusive_kind(rel: Relationship) -> bool:
-    kind = (rel.kind or "").lower().replace("-", "_")
-    return "exclusive" in kind or kind in ("one_of", "exactly_one", "at_most_one")
+    """Exact kind match after normalisation ('not_mutually_exclusive' must not count)."""
+    kind = (rel.kind or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return kind in EXCLUSIVE_KINDS
+
+
+def _is_active(rel: Relationship) -> bool:
+    """False only when the API marks the relationship inactive (``active: false``); absent = active."""
+    active = getattr(rel, "active", None)
+    if active is None:
+        return True
+    if isinstance(active, str):
+        return active.strip().lower() not in ("false", "0", "no", "inactive", "")
+    return bool(active)
 
 
 def apply_relationships(data: dict[str, Any], relationships: Sequence[Relationship]) -> dict[str, Any]:
@@ -220,7 +236,8 @@ def apply_relationships(data: dict[str, Any], relationships: Sequence[Relationsh
     A race is exclusive when one mutually-exclusive group contains all of its SIG legs; it is exhaustive
     only when that group is exactly its legs and the API marks the group exhaustive (a larger exhaustive
     group means something outside the race's legs can win -> False). Races without such evidence get
-    null, even if a previous run or a hand edit said otherwise.
+    null, even if a previous run or a hand edit said otherwise. Only an exact exclusivity kind
+    (EXCLUSIVE_KINDS) counts, and relationships the API marks inactive are ignored.
     """
     legs_by_race: dict[str, set[str]] = {}
     race_of_eid: dict[str, str] = {}
@@ -236,7 +253,7 @@ def apply_relationships(data: dict[str, Any], relationships: Sequence[Relationsh
     partial: list[str] = []
     exclusive = exhaustive = 0
     for rel in relationships:
-        if not _is_exclusive_kind(rel):
+        if not _is_exclusive_kind(rel) or not _is_active(rel):
             continue
         ids = {str(x) for x in rel.exchange_ids}
         touched = {race_of_eid[e] for e in ids if e in race_of_eid}
@@ -401,8 +418,13 @@ def upsert_db(
     *,
     now: datetime | None = None,
     resolutions: Mapping[str, str] | None = None,
+    relationships_fetched: bool = True,
 ) -> tuple[int, int]:
-    """Upsert Race rows for every race in the universe and Market rows for every leg with a SIG id."""
+    """Upsert Race rows for every race in the universe and Market rows for every leg with a SIG id.
+
+    ``relationships_fetched=False`` (no successful /relationships call in this run: --skip-sig, or the
+    call failed) stores ``exclusive`` / ``exhaustive`` as NULL: the values in ``data`` are then whatever
+    races.yaml held (an earlier run or a hand edit), which is not evidence."""
     now = now or utc_now()
     resolutions = resolutions or {}
     n_races = n_markets = 0
@@ -411,6 +433,8 @@ def upsert_db(
             vals = U.race_row_values(str(rid), entry if isinstance(entry, Mapping) else None)
             if vals is None:
                 continue
+            if not relationships_fetched:
+                vals["exclusive"] = vals["exhaustive"] = None
             row = s.get(Race, vals["race_id"])
             if row is None:
                 s.add(Race(**vals))
@@ -648,6 +672,7 @@ async def run(
     markets: list[MarketInfo] = []
     relationships: list[Relationship] = []
     owns_adapter = False
+    rels_ok = False  # exclusivity reaches the DB only from a relationships fetch made in this run
 
     if not args.skip_sig:
         if adapter is None:
@@ -715,6 +740,14 @@ async def run(
                 await client.aclose()
 
     report.stats = U.universe_stats(data)
+    no_pvi = sorted(
+        rid for rid, e in (data.get("races") or {}).items()
+        if isinstance(e, dict) and e.get("chamber") != "control" and not isinstance(e.get("pvi"), int | float)
+    )
+    if no_pvi:
+        report.notes.append(f"{len(no_pvi)} races have no pvi in races.yaml (set it by hand): {', '.join(no_pvi[:20])}")
+    if not rels_ok:
+        report.notes.append("no relationships fetched this run: exclusive/exhaustive stored as NULL in the DB")
     if args.dry_run:
         report.notes.append("dry run: races.yaml and the database were not written")
         return report
@@ -723,7 +756,9 @@ async def run(
         if session_factory is None:
             dbengine.init_db()
             session_factory = dbengine.session
-        report.db_races, report.db_markets = upsert_db(session_factory, data, now=now, resolutions=resolutions)
+        report.db_races, report.db_markets = upsert_db(
+            session_factory, data, now=now, resolutions=resolutions, relationships_fetched=rels_ok
+        )
     return report
 
 
