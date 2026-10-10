@@ -30,7 +30,7 @@ from rich.table import Table
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from sigcup.common.time import ensure_utc, hours_to
+from sigcup.common.time import ensure_utc, hours_to, utc_now
 from sigcup.db.models import (
     AccountSnap,
     Fill,
@@ -239,8 +239,6 @@ def kill_state(session: Session, sec: Secrets | None) -> dict[str, Any]:
 
 def status(session: Session, now: datetime | None = None, cfg: StrategyConfig | None = None, sec: Secrets | None = None) -> dict[str, Any]:
     """The hourly status snapshot as a plain dict."""
-    from sigcup.common.time import utc_now  # local: keeps the module import-light for the CLI
-
     now = ensure_utc(now or utc_now())
     cfg = cfg or config()
     d = {
@@ -262,7 +260,8 @@ def alerts(d: dict[str, Any], cfg: StrategyConfig) -> list[str]:
     out: list[str] = []
     for h in d["heartbeats"]:
         if h["stale"]:
-            out.append(f"{h['process']} heartbeat {'missing' if h['age_s'] is None else f'stale ({h["age_s"]:.0f} s)'}")
+            how = "missing" if h["age_s"] is None else f"stale ({h['age_s']:.0f} s)"
+            out.append(f"{h['process']} heartbeat {how}")
         elif h["status"] not in ("ok", "paper", "live"):
             out.append(f"{h['process']} status {h['status']}")
     if d["kill"]["kill_file_present"]:
@@ -423,7 +422,7 @@ def calibration(session: Session, now: datetime, days: int = 1) -> dict[str, Any
             b["fair_sum"] += fair
             b["price_sum"] += price
         meta = s.meta if isinstance(s.meta, dict) else {}
-        ref = _first_number(meta, "ref", "ref_mid", "reference", "ref_price", "kalshi", "polymarket")
+        ref = _first_number(meta, *REF_KEYS)
         if ref is not None:
             ref_gaps.append(fair - ref)
     return {
@@ -438,13 +437,37 @@ def calibration(session: Session, now: datetime, days: int = 1) -> dict[str, Any
     }
 
 
-def _first_number(meta: dict[str, Any], *keys: str) -> float | None:
+REF_KEYS = ("ref", "ref_mid", "reference", "ref_price", "kalshi", "polymarket")
+VALUE_KEYS = ("mid", "yes_mid", "price", "fair", "value")
+
+
+def _as_number(v: Any) -> float | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int | float):
+        return float(v)
+    if isinstance(v, dict):
+        for k in VALUE_KEYS:
+            n = _as_number(v.get(k))
+            if n is not None:
+                return n
+    return None
+
+
+def _first_number(meta: dict[str, Any], *keys: str, depth: int = 3) -> float | None:
+    """The first numeric value under any of ``keys`` (a dict value yields its mid/price), searching
+    nested dicts up to ``depth`` levels so ``{"components": {"ref": {...}}}`` is found too."""
     for k in keys:
-        v = meta.get(k)
-        if isinstance(v, dict):
-            v = _first_number(v, "mid", "yes_mid", "price", "fair")
-        if isinstance(v, int | float) and not isinstance(v, bool):
-            return float(v)
+        if k in meta:
+            n = _as_number(meta[k])
+            if n is not None:
+                return n
+    if depth > 0:
+        for v in meta.values():
+            if isinstance(v, dict):
+                n = _first_number(v, *keys, depth=depth - 1)
+                if n is not None:
+                    return n
     return None
 
 
@@ -510,8 +533,6 @@ def rank_history(session: Session, now: datetime, days: int = 14) -> dict[str, A
 
 def daily(session: Session, now: datetime | None = None, cfg: StrategyConfig | None = None) -> dict[str, Any]:
     """The daily report as a plain dict (P&L by strategy, CLV, calibration, rank history)."""
-    from sigcup.common.time import utc_now
-
     now = ensure_utc(now or utc_now())
     cfg = cfg or config()
     return {

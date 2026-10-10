@@ -17,6 +17,7 @@ import asyncio
 import importlib
 import importlib.util
 import json
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -36,7 +37,8 @@ from sigcup.settings import Secrets, StrategyConfig
 from sigcup.sig.schemas import OrderRequest, round_tick
 
 log = get_logger(__name__)
-console = Console()
+# a pipe (pm2 logs, tests) gets a fixed wide console so tables are not wrapped at 80 columns
+console = Console(width=None if sys.stdout.isatty() else 140)
 err_console = Console(stderr=True)
 
 app = typer.Typer(help="sigcup: SIG Predictions Cup trading system", no_args_is_help=True, rich_markup_mode="rich")
@@ -90,11 +92,14 @@ def load_script(name: str, *, what: str) -> ModuleType:
     if spec is None or spec.loader is None:
         fail(f"{what}: cannot load {path}")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod  # dataclasses with postponed annotations resolve them via sys.modules
     try:
         spec.loader.exec_module(mod)
     except NotImplementedError as e:
+        sys.modules.pop(spec.name, None)
         fail(f"{what} is not implemented yet ({path.name}: {e})")
     except Exception as e:  # noqa: BLE001
+        sys.modules.pop(spec.name, None)
         fail(f"{what} failed to load ({path.name}): {type(e).__name__}: {e}")
     return mod
 
@@ -518,7 +523,8 @@ async def run_canary(
         elif last is not None:
             price = last
         else:
-            price = 0.5
+            res.error = f"no price data for {exchange_id}: is the exchange id right and the market open?"
+            return res
         res.price = round_tick(float(price))
         if live and res.price > 0.5 and not take:
             # a canary must stay cheap: never bid more than 0.50 unless the user asked to take

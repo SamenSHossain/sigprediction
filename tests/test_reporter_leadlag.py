@@ -54,8 +54,8 @@ def test_resample_forward_fills_without_backfill():
     start = datetime(2026, 10, 1, tzinfo=UTC)
     pts = [(start + timedelta(hours=1, minutes=30), 0.5), (start + timedelta(hours=4), 0.7)]
     s = leadlag.resample(pts, start, start + timedelta(hours=6), timedelta(hours=1))
-    assert s == [None, 0.5, 0.5, 0.5, 0.5, 0.7]
-    assert leadlag.diff(s) == [0.0, 0.0, 0.0, 0.0, 0.2]
+    assert s == [None, 0.5, 0.5, 0.5, 0.7, 0.7]  # a point exactly on a slot start lands in that slot
+    assert [round(d, 9) for d in leadlag.diff(s)] == [0.0, 0.0, 0.0, 0.2, 0.0]
     assert leadlag.resample([], start, start + timedelta(hours=2), timedelta(hours=1)) == [None, None]
 
 

@@ -24,8 +24,8 @@ def quote(eid: str, ts: datetime, bid: float | None, ask: float | None, last: fl
 
 
 def test_clv_sign_convention():
-    assert clv.clv_value("yes", "buy", 0.60, 0.70) == 0.10
-    assert clv.clv_value("yes", "sell", 0.60, 0.70) == -0.10
+    assert abs(clv.clv_value("yes", "buy", 0.60, 0.70) - 0.10) < 1e-12
+    assert abs(clv.clv_value("yes", "sell", 0.60, 0.70) + 0.10) < 1e-12
     assert abs(clv.clv_value("no", "buy", 0.40, 0.70) - (-0.10)) < 1e-12  # buy NO @0.40 == sell YES @0.60
     assert abs(clv.clv_value("no", "sell", 0.40, 0.70) - 0.10) < 1e-12  # sell NO @0.40 == buy YES @0.60
     assert clv.clv_value("yes", "buy", 0.60, None) is None
@@ -83,7 +83,7 @@ def test_compute_is_incremental_and_idempotent(db):
     assert st.updated_24h == 1
     with dbengine.session() as s:
         st = clv.compute(s, T0 + timedelta(hours=30), deadline=DEADLINE)
-        assert s.execute(select(CLV)).scalars().one().clv_24h == 0.05
+        assert abs(s.execute(select(CLV)).scalars().one().clv_24h - 0.05) < 1e-9
     assert st.created == 0 and st.updated_24h == 0  # nothing recomputed
 
 
