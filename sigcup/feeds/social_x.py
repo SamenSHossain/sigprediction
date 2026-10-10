@@ -12,7 +12,10 @@ Every vendor payload is normalised into the v2 shape ``{id, text, created_at, au
 author: {username, created_at}}`` before it becomes a Post, so downstream code never sees vendor
 quirks. Queries come from the gazetteer per race: ``("Full Name" OR @handle OR #tag) -is:retweet lang:en``
 (``-filter:retweets`` for the web-search-syntax vendors). Each run queries ``max_queries`` races
-round-robin (KV cursor) and remembers the newest id per race (``x:since:<race_id>``).
+round-robin (KV cursor) and remembers the newest id per race (``x:since:<race_id>``). A 429, 5xx,
+auth or network failure stops the cycle (the cursor stays put); a request-specific 4xx (a since_id
+older than the 7-day window, a rejected query) drops that race's since_id, retries once without it
+and otherwise skips the race, so one bad race can never stall the round-robin.
 
 LinkedIn, Instagram and Facebook are NOT collected anywhere in this package: no keyword-search API
 exists for them and scraping is a ToS breach with litigation history (docs/research/practitioners_and_data.md).
@@ -29,7 +32,7 @@ import httpx
 
 from sigcup.common.time import utc_now
 from sigcup.db.repo import kv_get, kv_set
-from sigcup.feeds.nlp.gazetteer import Gazetteer, PostDraft, load_gazetteer, parse_ts, pick, write_posts
+from sigcup.feeds.nlp.gazetteer import Gazetteer, PostDraft, load_gazetteer, parse_ts, pick, write_posts_async
 from sigcup.settings import Secrets, StrategyConfig
 
 log = logging.getLogger(__name__)
@@ -193,25 +196,46 @@ def request_spec(vendor: str, key: str, query: str, *, since_id: str | None = No
     raise ValueError(f"unknown X vendor {vendor!r}")
 
 
-async def fetch(http: httpx.AsyncClient, vendor: str, key: str, query: str, *, since_id: str | None = None) -> Any | None:
-    """One search request; None on any failure (status and vendor logged, never the key or headers)."""
+FETCH_OK = "ok"
+FETCH_STOP = "stop"  # 429, 5xx, auth/billing or network trouble: stop this cycle, retry the race next cycle
+FETCH_SKIP = "skip"  # the vendor rejected this one request (400 bad since_id or query): move on to the next race
+STOP_STATUSES = frozenset({401, 402, 403, 408, 429})
+
+
+async def fetch_result(
+    http: httpx.AsyncClient, vendor: str, key: str, query: str, *, since_id: str | None = None
+) -> tuple[str, Any | None]:
+    """One search request -> ``(FETCH_OK, payload)``, ``(FETCH_STOP, None)`` or ``(FETCH_SKIP, None)``.
+
+    Only a request-specific 4xx (400 'Invalid since_id', a rejected query, 404/422) is a skip; anything
+    that would fail for every race (rate limit, auth, credits, outage) stops the cycle. Status and vendor
+    are logged, never the key or headers.
+    """
     url, params, headers = request_spec(vendor, key, query, since_id=since_id)
     try:
         r = await http.get(url, params=params, headers=headers, timeout=HTTP_TIMEOUT_S)
     except httpx.HTTPError as exc:
         log.warning("x[%s]: request failed: %s", vendor, type(exc).__name__)
-        return None
+        return FETCH_STOP, None
     if r.status_code == 429:
         log.warning("x[%s]: rate limited; stopping this cycle", vendor)
-        return None
+        return FETCH_STOP, None
     if r.status_code != 200:
         log.warning("x[%s]: HTTP %s", vendor, r.status_code)
-        return None
+        if 400 <= r.status_code < 500 and r.status_code not in STOP_STATUSES:
+            return FETCH_SKIP, None
+        return FETCH_STOP, None
     try:
-        return r.json()
+        return FETCH_OK, r.json()
     except ValueError:
         log.warning("x[%s]: non-JSON response", vendor)
-        return None
+        return FETCH_STOP, None
+
+
+async def fetch(http: httpx.AsyncClient, vendor: str, key: str, query: str, *, since_id: str | None = None) -> Any | None:
+    """One search request; None on any failure (see :func:`fetch_result` for the failure kinds)."""
+    _status, payload = await fetch_result(http, vendor, key, query, since_id=since_id)
+    return payload
 
 
 # ---------------------------------------------------------------------------------------------
@@ -266,12 +290,23 @@ async def run_once(
         for rid, query in jobs:
             with session_factory() as s:
                 since_id = kv_get(s, KV_SINCE_PREFIX + rid)
-            payload = await fetch(client, vendor, key, query, since_id=since_id)
-            if payload is None:
+            status, payload = await fetch_result(client, vendor, key, query, since_id=since_id)
+            if status == FETCH_SKIP and since_id:
+                # most likely a since_id older than the 7-day window: drop it and ask once without
+                log.info("x[%s]: %s rejected with since_id; retrying without it", vendor, rid)
+                since_id = None
+                with session_factory() as s:
+                    kv_set(s, KV_SINCE_PREFIX + rid, None)
+                status, payload = await fetch_result(client, vendor, key, query)
+            if status == FETCH_STOP:
                 break  # a 429 or outage: do not burn the budget on the remaining races
-            done += 1
+            done += 1  # a rejected race still advances the cursor, so it cannot stall the queue
+            if status != FETCH_OK:
+                log.warning("x[%s]: %s query rejected; skipping it this round", vendor, rid)
+                continue
             tweets = normalise(vendor, payload)
-            total += write_posts(session_factory, to_drafts(tweets, rid, now=now), gazetteer, require_link=True, now=now)
+            drafts = to_drafts(tweets, rid, now=now)
+            total += await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
             with session_factory() as s:
                 kv_set(s, KV_SINCE_PREFIX + rid, _max_id(tweets, since_id))
     finally:

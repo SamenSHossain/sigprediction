@@ -636,8 +636,9 @@ def normalize_rating(text: str | None) -> tuple[str, str | None] | None:
     if level == "tossup":
         return ("tossup", None)
     if party is None:
-        # "Lean D" written as "D Lean"? try a party token anywhere
-        pm = re.search(r"\b(democratic|democrat|dem|republican|gop|rep|independent)\b|\b([DRI])\b", t)
+        # "D Lean", "R-Likely", "Lean (R)": try a party token anywhere (`t` is lower-cased, so the
+        # single-letter form is matched case-insensitively; parentheses are word boundaries)
+        pm = re.search(r"\b(democratic|democrat|dem|republican|gop|rep|independent|ind)\b|\b([dri])\b", t)
         if pm:
             party = _PARTY_WORDS.get((pm.group(1) or pm.group(2)).lower())
     if party is None:

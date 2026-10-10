@@ -319,7 +319,7 @@ races:
     label: Florida Senate
     special: true
     incumbent_party: R
-    pvi: null
+    pvi: 5
     exclusive: null
     exhaustive: null
     settlement_note: Special election for the remainder of the Rubio term (seat held by appointee Ashley Moody).
@@ -1017,7 +1017,7 @@ races:
     label: New Hampshire Senate
     special: false
     incumbent_party: D
-    pvi: null
+    pvi: -1
     exclusive: null
     exhaustive: null
     settlement_note: Open seat (Shaheen retiring).
@@ -1890,7 +1890,7 @@ races:
     label: Florida Governor
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: 5
     exclusive: null
     exhaustive: null
     settlement_note: Open seat (DeSantis term-limited).
@@ -2412,7 +2412,7 @@ races:
     label: New Hampshire Governor
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: -1
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -2491,7 +2491,7 @@ races:
     label: Nevada Governor
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: 1
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -3356,7 +3356,7 @@ races:
     label: CO-08 House
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: 0
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -4092,7 +4092,7 @@ races:
     label: NE-02 House
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: -2
     exclusive: null
     exhaustive: null
     settlement_note: Open seat (Bacon retiring).
@@ -4129,7 +4129,7 @@ races:
     label: NH-01 House
     special: false
     incumbent_party: D
-    pvi: null
+    pvi: -1
     exclusive: null
     exhaustive: null
     settlement_note: Open seat (Pappas running for Senate).
@@ -4250,7 +4250,7 @@ races:
     label: NY-17 House
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: -1
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -4292,7 +4292,7 @@ races:
     label: PA-01 House
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: 0
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -4539,7 +4539,7 @@ races:
     label: TX-15 House
     special: false
     incumbent_party: R
-    pvi: null
+    pvi: 6
     exclusive: null
     exhaustive: null
     settlement_note: null
@@ -4623,7 +4623,7 @@ races:
     label: TX-28 House
     special: false
     incumbent_party: D
-    pvi: null
+    pvi: 3
     exclusive: null
     exhaustive: null
     settlement_note: null
