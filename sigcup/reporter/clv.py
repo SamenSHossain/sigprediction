@@ -20,6 +20,11 @@ formula covers all four side/action combinations::
 
 ``aggregate_by_strategy(session)`` returns one plain dict per strategy tag (plus an ``all`` row) for the
 daily report; ``render_table(rows)`` turns them into a rich table.
+
+``strategy_gate(rows)`` is the scorecard's kill line (STRATEGY.md section 10: "a tag whose 24-h CLV is
+negative over 50 fills is cut by hand"): one entry per strategy tag, flagged ``consider disabling`` when
+its mean 24-h CLV is below zero over at least ``CLV_GATE_MIN_FILLS`` fills that have a 24-h CLV. It only
+reports; nothing changes the configuration.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from rich.table import Table
 from sqlalchemy import select
@@ -39,6 +45,8 @@ from sigcup.settings import config
 HORIZON = timedelta(hours=24)
 WINDOW = timedelta(hours=1)
 UNKNOWN_STRATEGY = "unknown"
+CLV_GATE_MIN_FILLS = 50  # scored fills before a negative mean 24-h CLV flags a strategy (STRATEGY.md section 10)
+GATE_FLAG = "consider disabling"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -294,6 +302,54 @@ def aggregate_by_strategy(session: Session, *, paper: bool | None = None) -> lis
     if pairs:
         rows.append({"strategy": "all", **_summary(pairs)})
     return rows
+
+
+def gate_min_fills(cfg: Any = None) -> int:
+    """The gate's fill threshold: ``cfg.reporter.clv_gate_min_fills`` when the config defines it, else
+    ``CLV_GATE_MIN_FILLS``."""
+    v = getattr(getattr(cfg, "reporter", None), "clv_gate_min_fills", None)
+    try:
+        return max(1, int(v)) if v is not None else CLV_GATE_MIN_FILLS
+    except (TypeError, ValueError):
+        return CLV_GATE_MIN_FILLS
+
+
+def strategy_gate(rows: Iterable[dict], min_fills: int = CLV_GATE_MIN_FILLS) -> list[dict]:
+    """One gate entry per strategy row of ``aggregate_by_strategy`` (the ``all`` row is skipped; a ``mode``
+    key is carried through). ``flag`` is True when ``clv_24h_mean < 0`` over ``n_24h >= min_fills``
+    scored fills; ``status`` is ``consider disabling``, ``ok`` or ``too few fills (n/min)``. Report only."""
+    out: list[dict] = []
+    for r in rows:
+        if r.get("strategy") == "all":
+            continue
+        n = int(r.get("n_24h") or 0)
+        mean = r.get("clv_24h_mean")
+        enough = n >= min_fills
+        flag = bool(enough and mean is not None and mean < 0)
+        status = GATE_FLAG if flag else ("ok" if enough else f"too few fills ({n}/{min_fills})")
+        entry = {"strategy": r.get("strategy"), "n_24h": n, "clv_24h_mean": mean, "clv_24h_weighted": r.get("clv_24h_weighted"), "flag": flag, "status": status}
+        if "mode" in r:
+            entry = {"mode": r["mode"], **entry}
+        out.append(entry)
+    return out
+
+
+def render_gate(gate: list[dict], min_fills: int = CLV_GATE_MIN_FILLS) -> Table:
+    """One line per strategy: mean 24-h CLV, scored fills and the gate status (flagged lines in red)."""
+    t = Table(title=f"CLV gate per strategy (flagged: mean 24-h CLV < 0 over >= {min_fills} scored fills; report only, no config change)")
+    with_mode = any("mode" in g for g in gate)
+    cols = (("mode",) if with_mode else ()) + ("strategy", "n24h", "clv24h", "wclv24h", "status")
+    for col in cols:
+        t.add_column(col, justify="left" if col in ("mode", "strategy", "status") else "right")
+    for g in gate:
+        status = f"[bold red]{g['status']}[/bold red]" if g["flag"] else g["status"]
+        t.add_row(
+            *((str(g.get("mode", "-")),) if with_mode else ()),
+            str(g["strategy"]), str(g["n_24h"]), _fmt(g["clv_24h_mean"]), _fmt(g["clv_24h_weighted"]), status,
+        )
+    if not gate:
+        t.add_row(*(("(no fills yet)",) + ("",) * (len(cols) - 1)))
+    return t
 
 
 def _fmt(v: float | None, pct: bool = False, digits: int = 3) -> str:

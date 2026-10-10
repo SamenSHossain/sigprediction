@@ -6,8 +6,9 @@ Flow of ``run_once`` (non-blocking; safe to call every cycle):
 
 1. harvest a pending Message Batch whose id is persisted in KV (``stance:batch``) - a restart resumes;
 2. the queue is the unclassified, race-linked posts, NEWEST first; posts older than the features
-   window (``2 x baseline_days + 1`` days) are marked classified without a call (they can no longer
-   move a feature) and posts already in the pending batch are left alone;
+   window (``2 x baseline_days + 1`` days) and posts the bot filter flags (``bot_score >
+   BOT_THRESHOLD``, the cut features.py applies at aggregation) are marked classified without a call
+   or a Stance row (they can never move a feature) and posts already in the pending batch are left alone;
 3. cache: a post whose ``text_hash`` already has Stance rows gets copies (model ``cache``), no API call;
 4. the remaining posts are packed ``max_posts_per_batch`` per request: fewer than ``BATCH_THRESHOLD``
    (50) go through the regular Messages API now; more are submitted as one Message Batch (50 %
@@ -43,6 +44,7 @@ from sqlalchemy import select, update
 from sigcup.common.time import utc_now
 from sigcup.db.models import Post, Stance
 from sigcup.db.repo import kv_get, kv_set
+from sigcup.feeds.nlp.botfilter import BOT_THRESHOLD
 from sigcup.feeds.nlp.gazetteer import Gazetteer, load_gazetteer, pick
 from sigcup.settings import Secrets, StrategyConfig
 
@@ -374,13 +376,18 @@ def _load_unclassified(
 ) -> list[Post]:
     """Up to ``limit`` unclassified race-linked posts, newest first.
 
-    Posts older than ``since`` are marked classified (no Stance) without a call; ``exclude`` (posts in
-    the pending batch) are skipped; posts without race_ids are marked classified.
+    Posts older than ``since`` and bot-flagged posts (``bot_score > BOT_THRESHOLD``: features.py drops
+    them, so a label would be wasted spend) are marked classified (no Stance) without a call, in SQL
+    before the limit so they never crowd real posts out of a cycle; ``exclude`` (posts in the pending
+    batch) are skipped; posts without race_ids are marked classified.
     """
     if since is not None:
         stale = s.execute(update(Post).where(Post.classified.is_(False), Post.ts < since).values(classified=True))
         if stale.rowcount:
             log.info("stance: skipped %d unclassified posts older than %s", stale.rowcount, since.date())
+    bots = s.execute(update(Post).where(Post.classified.is_(False), Post.bot_score > BOT_THRESHOLD).values(classified=True))
+    if bots.rowcount:
+        log.info("stance: skipped %d bot-flagged posts (bot_score > %.2f)", bots.rowcount, BOT_THRESHOLD)
     skip = set(exclude)
     rows = (
         s.execute(select(Post).where(Post.classified.is_(False)).order_by(Post.ts.desc()).limit(limit * 2 + len(skip)))

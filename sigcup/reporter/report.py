@@ -1,5 +1,6 @@
 """Hourly status (heartbeats, cash, exposure by party/state, open orders) and the daily report
-(P&L by strategy tag, CLV table, calibration of fair values vs reference, rank history).
+(P&L by strategy tag, CLV table and per-strategy CLV gate, calibration of fair values vs reference,
+the correlated settlement P&L distribution of the current positions, rank history).
 
 Both entry points return plain dicts (JSON-serialisable, used by tests, the KV store and the daily
 JSON file) and have a rich renderer::
@@ -24,8 +25,8 @@ carries the NO price; ``mark`` is the YES mid. ``yes_avg_price`` converts the co
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -60,6 +61,7 @@ STALE_AFTER_S: dict[str, float] = {"trader": 90, "feeds": 240, "reporter": 4500}
 DEFAULT_STALE_S = 600.0
 WORKING_STATES = {IntentState.SENT.value, IntentState.UNCERTAIN.value, IntentState.ACKED.value}
 KV_KILLED = "killed"
+PORTFOLIO_LOSS_FRAC = 0.10  # the daily report's P(settlement loss > this fraction of bankroll_start)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -437,12 +439,19 @@ def equity_curve(session: Session, now: datetime, cfg: StrategyConfig) -> dict[s
 _CalSample = tuple[str, float, float | None, float | None, int, float | None]
 
 
-def calibration(session: Session, now: datetime, days: int = 1, cfg: StrategyConfig | None = None) -> dict[str, Any]:
+def calibration(
+    session: Session,
+    now: datetime,
+    days: int = 1,
+    cfg: StrategyConfig | None = None,
+    fair_values: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Fair-vs-price and fair-vs-reference summary.
 
     From the Signal rows of the last ``days`` when a producer wrote any (``source: "signals"``);
     otherwise from the model's current fair values (``fairvalue.compute_all`` over every market, priced
     against the latest SIG mid and the fair value's own ``ref`` component: ``source: "fair_values"``).
+    ``fair_values`` supplies them (the daily report shares one computation); by default they are computed.
     """
     since = now - timedelta(days=days)
     rows = session.execute(select(Signal).where(Signal.ts >= since)).scalars().all()
@@ -467,7 +476,7 @@ def calibration(session: Session, now: datetime, days: int = 1, cfg: StrategyCon
     if not rows:
         source = "fair_values"
         try:
-            samples = _fair_value_samples(session, now, cfg or config())
+            samples = _fair_value_samples(session, now, cfg or config(), fair_values)
         except Exception as e:  # noqa: BLE001 - the report must render even if the model cannot run
             log.warning("calibration: fair values unavailable: %s: %s", type(e).__name__, e)
             error = f"{type(e).__name__}: {e}"
@@ -517,9 +526,12 @@ def _signal_ref(meta: dict[str, Any]) -> float | None:
     return _first_number(meta, *REF_KEYS)
 
 
-def _fair_value_samples(session: Session, now: datetime, cfg: StrategyConfig) -> list[_CalSample]:
-    """One calibration sample per market the model prices now (imported lazily: the reporter never
-    depends on the trader package being importable for its other sections)."""
+def current_fair_values(session: Session, now: datetime, cfg: StrategyConfig) -> dict[str, Any]:
+    """``fairvalue.compute_all`` over every market with a known race, quoted at the latest SIG quote.
+
+    The trader persists no per-market fair values (Signal rows exist only for orders that survived risk,
+    deduplicated), so the reporter recomputes them from the same DB inputs. The trader package is
+    imported lazily: the reporter never depends on it being importable for its other sections."""
     from sigcup.trader import fairvalue
     from sigcup.trader.types import MarketView
 
@@ -540,8 +552,36 @@ def _fair_value_samples(session: Session, now: datetime, cfg: StrategyConfig) ->
                 ts=q.ts if q is not None else None, status=m.status or "open",
             )
         )
+    return fairvalue.compute_all(session, cfg, views, now)
+
+
+def _shared_fair_values(session: Session, now: datetime, cfg: StrategyConfig) -> Callable[[], dict[str, Any]]:
+    """A thunk that computes :func:`current_fair_values` on first use and then returns the same result
+    (or re-raises the same error), so one daily report runs the model at most once."""
+    memo: dict[str, Any] = {}
+
+    def get() -> dict[str, Any]:
+        if "error" in memo:
+            raise memo["error"]
+        if "fair" not in memo:
+            try:
+                memo["fair"] = current_fair_values(session, now, cfg)
+            except Exception as e:
+                memo["error"] = e
+                raise
+        return memo["fair"]
+
+    return get
+
+
+def _fair_value_samples(
+    session: Session, now: datetime, cfg: StrategyConfig, fair_values: Callable[[], dict[str, Any]] | None = None
+) -> list[_CalSample]:
+    """One calibration sample per market the model prices now."""
+    fair = fair_values() if fair_values is not None else current_fair_values(session, now, cfg)
+    quotes = latest_quotes(session)
     out: list[_CalSample] = []
-    for eid, fv in sorted(fairvalue.compute_all(session, cfg, views, now).items()):
+    for eid, fv in sorted(fair.items()):
         comps = fv.components if isinstance(fv.components, dict) else {}
         ref = comps.get("ref")
         out.append(("fair_value", float(fv.fair), quote_mid(quotes.get(eid)), None, 0, float(ref) if ref is not None else None))
@@ -644,6 +684,120 @@ def rank_history(session: Session, now: datetime, days: int = 14) -> dict[str, A
     }
 
 
+def _loss_frac(cfg: StrategyConfig) -> float:
+    v = getattr(getattr(cfg, "reporter", None), "portfolio_loss_frac", None)
+    try:
+        return float(v) if v is not None else PORTFOLIO_LOSS_FRAC
+    except (TypeError, ValueError):
+        return PORTFOLIO_LOSS_FRAC
+
+
+def portfolio_risk(
+    session: Session,
+    now: datetime,
+    cfg: StrategyConfig,
+    fair_values: Callable[[], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Settlement P&L distribution of the current positions under the correlated simulation.
+
+    Inputs: every seat race's legs at the model's current fair values (``fair_values``, by default
+    :func:`current_fair_values`; the daily report shares one computation with the calibration
+    fallback, and a flat book computes nothing). A positioned leg without a fair value is priced at its
+    mark (``Position.mark``, then the latest SIG mid; listed in ``mark_fallback``). As in
+    ``fairvalue.compute_all``, a major-party leg that fields no candidate is left out of the race and
+    settles NO. ``simulate.simulate`` (``simulation.n_sims``, ``simulation.seed``) draws the outcomes; a
+    control market settles on the simulated seat count reaching the majority. ``simulate.portfolio_pnl``
+    then values each position against its cost in YES terms (``yes_avg_price``, else the mark), so the
+    figures are what the book makes at settlement relative to what was paid; the same distribution
+    relative to today's marks is shifted by ``-unrealised_at_mark``. Positions that cannot be simulated
+    (unknown race, no price, a control market whose chamber has no simulated seats) are listed in
+    ``unsimulated`` and left out of the figures. Never raises: a failure is reported in ``error``.
+    """
+    loss_frac = _loss_frac(cfg)
+    threshold = loss_frac * float(cfg.bankroll_start)
+    held = {p.exchange_id: p for p in session.execute(select(Position)).scalars().all() if p.quantity}
+    out: dict[str, Any] = {
+        "n_positions": len(held), "n_simulated": 0, "n_sims": 0, "basis": "cost",
+        "mean": None, "p05": None, "p50": None, "p95": None, "p_loss": None,
+        "loss_frac": loss_frac, "loss_threshold": threshold, "unrealised_at_mark": None,
+        "mark_fallback": [], "unsimulated": [], "error": None,
+    }
+    if not held:
+        return out
+    try:
+        import numpy as np
+
+        from sigcup.trader import fairvalue
+        from sigcup.trader import simulate as sim_mod
+
+        fair = fair_values() if fair_values is not None else current_fair_values(session, now, cfg)
+        quotes = latest_quotes(session)
+        meta = fairvalue.load_races(session)
+        candidates = dict(session.execute(select(Race.race_id, Race.candidates)).all())
+        race_fairs: dict[str, dict[str, float]] = {}
+        empty_legs: list[str] = []
+        fallback: list[str] = []
+        for race_id, info in sorted(meta.items()):
+            if info.chamber == "control":
+                continue
+            roles = {eid: fairvalue._role(party) for party, eid in info.markets.items()}
+            empty_roles = fairvalue._empty_major_roles(candidates.get(race_id), roles)
+            for party, eid in info.markets.items():
+                if roles[eid] in empty_roles:
+                    empty_legs.append(eid)  # fields no candidate: cannot win the seat
+                    continue
+                fv = fair.get(eid)
+                p = float(fv.fair) if fv is not None and fv.fair is not None else None
+                if p is None and eid in held:
+                    p = _mark_for(eid, held, quotes, None)
+                    if p is not None:
+                        fallback.append(eid)
+                if p is not None:
+                    race_fairs.setdefault(race_id, {})[party] = p
+        n = int(cfg.simulation.n_sims)
+        sim = sim_mod.simulate(race_fairs, meta, cfg, n=n, seed=cfg.simulation.seed)
+        samples = dict(sim.samples)
+        for eid in empty_legs:
+            samples[eid] = np.zeros(sim.n, dtype=np.uint8)
+        majority = {"senate": sim_mod.SENATE_MAJORITY, "house": sim_mod.HOUSE_MAJORITY}
+        for info in meta.values():
+            chamber = fairvalue.control_chamber(info) if info.chamber == "control" else None
+            if chamber not in sim.seats:
+                continue
+            d_control = sim.seats[chamber] >= majority[chamber]
+            for party, eid in info.markets.items():
+                role = fairvalue._role(party)
+                if role in ("D", "R"):
+                    samples[eid] = (d_control if role == "D" else ~d_control).astype(np.uint8)
+        book: dict[str, tuple[float, float | None]] = {}
+        unrealised = 0.0
+        for eid, p in sorted(held.items()):
+            qty = int(p.quantity)
+            mark = _mark_for(eid, held, quotes, None)
+            basis = yes_avg_price(qty, p.avg_price)
+            basis = basis if basis is not None else mark
+            if eid not in samples or basis is None:
+                out["unsimulated"].append({"exchange_id": eid, "quantity": qty, "at_risk": at_risk(qty, mark if mark is not None else basis)})
+                continue
+            book[eid] = (float(qty), float(basis))
+            if mark is not None:
+                unrealised += qty * (mark - basis)
+        out["mark_fallback"] = sorted(e for e in fallback if e in book)
+        out["n_simulated"] = len(book)
+        out["n_sims"] = sim.n
+        if book:
+            pnl = sim_mod.portfolio_pnl(book, replace(sim, samples=samples))
+            p05, p50, p95 = (float(x) for x in np.percentile(pnl, [5, 50, 95]))
+            out.update(
+                mean=float(pnl.mean()), p05=p05, p50=p50, p95=p95,
+                p_loss=float(np.mean(pnl < -threshold)), unrealised_at_mark=float(unrealised),
+            )
+    except Exception as e:  # noqa: BLE001 - the report must render even if the model cannot run
+        log.warning("portfolio P&L simulation unavailable: %s: %s", type(e).__name__, e)
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def clv_by_mode(session: Session) -> list[dict[str, Any]]:
     """CLV rows per strategy with a ``mode`` key: the live rows (and their ``all``) first, then paper.
     Paper fills (synthetic crosses at our resting price) never dilute the live scorecard."""
@@ -651,17 +805,24 @@ def clv_by_mode(session: Session) -> list[dict[str, Any]]:
 
 
 def daily(session: Session, now: datetime | None = None, cfg: StrategyConfig | None = None) -> dict[str, Any]:
-    """The daily report as a plain dict (P&L by strategy, CLV, calibration, rank history)."""
+    """The daily report as a plain dict (P&L by strategy, CLV and its per-strategy gate, calibration,
+    rank history)."""
     now = ensure_utc(now or utc_now())
     cfg = cfg or config()
+    clv_rows = clv_by_mode(session)
+    gate_n = clvmod.gate_min_fills(cfg)
+    fair_values = _shared_fair_values(session, now, cfg)  # computed at most once, only when needed
     return {
         "ts": now.isoformat(),
         "day": now.strftime("%Y-%m-%d"),
         "hours_to_deadline": hours_to(cfg.deadline_utc, now),
         "equity": equity_curve(session, now, cfg),
         "pnl": pnl_by_strategy(session),
-        "clv": clv_by_mode(session),
-        "calibration": calibration(session, now, cfg=cfg),
+        "clv": clv_rows,
+        "clv_gate": clvmod.strategy_gate(clv_rows, gate_n),
+        "clv_gate_min_fills": gate_n,
+        "calibration": calibration(session, now, cfg=cfg, fair_values=fair_values),
+        "portfolio_pnl": portfolio_risk(session, now, cfg, fair_values=fair_values),
         "sig_vs_ref": sig_vs_ref(session),
         "rank_history": rank_history(session, now),
         "exposure": exposure(session),
@@ -764,6 +925,30 @@ def render_daily(d: dict[str, Any]) -> Group:
     if not sr["largest"]:
         st.add_row("(no crosswalked quotes yet)", "", "", "", "", "")
 
+    pr = d.get("portfolio_pnl")
+    pt: Table | None = None
+    if pr is not None:
+        pt = Table(
+            title=f"Portfolio settlement P&L (correlated simulation, n={pr['n_sims']}; vs cost basis; fair values from the model, "
+            f"marks where missing; today's unrealised {_n(pr['unrealised_at_mark'], 0, True)})"
+        )
+        loss_col = f"P(loss > {pr['loss_threshold']:.0f})"
+        for col in ("positions", "simulated", "mean", "p5", "p50", "p95", loss_col):
+            pt.add_column(col, justify="right")
+        if pr["mean"] is not None:
+            pt.add_row(
+                str(pr["n_positions"]), str(pr["n_simulated"]), _n(pr["mean"], 0, True), _n(pr["p05"], 0, True),
+                _n(pr["p50"], 0, True), _n(pr["p95"], 0, True), f"{pr['p_loss']:.1%}",
+            )
+        elif pr.get("error"):
+            pt.add_row(f"(simulation unavailable: {pr['error'][:60]})", "", "", "", "", "", "")
+        elif not pr["n_positions"]:
+            pt.add_row("(no positions)", "", "", "", "", "", "")
+        else:
+            pt.add_row(str(pr["n_positions"]), "0", "-", "-", "-", "-", "-")
+        if pr.get("unsimulated"):
+            pt.add_row(f"not simulated: {', '.join(u['exchange_id'] for u in pr['unsimulated'][:6])}", "", "", "", "", "", "")
+
     rk = Table(title="Rank history")
     for col in ("day", "rank", "total", "members", "top 3"):
         rk.add_column(col, justify="right" if col != "day" else "left")
@@ -772,4 +957,8 @@ def render_daily(d: dict[str, Any]) -> Group:
     if not rh["points"]:
         rk.add_row("(no leaderboard snapshots yet)", "", "", "", "")
 
-    return Group(head, pnl, clvmod.render_table(d["clv"]), ct, st, rk)
+    gate = clvmod.render_gate(d.get("clv_gate") or [], d.get("clv_gate_min_fills") or clvmod.CLV_GATE_MIN_FILLS)
+    parts: list[Any] = [head, pnl, clvmod.render_table(d["clv"]), gate, ct]
+    if pt is not None:
+        parts.append(pt)
+    return Group(*parts, st, rk)
