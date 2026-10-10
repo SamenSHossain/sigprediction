@@ -30,6 +30,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,6 +49,9 @@ log = logging.getLogger(__name__)
 KNOWN_EVENTS = ("market_batch", "book_dirty", "market_settled", "account_batch")
 TOKEN_LIFETIME_S = 3 * 3600.0
 DEFAULT_TOKEN_REFRESH_S = 2.5 * 3600.0
+TOKEN_REUSE_MIN_S = 15 * 60.0  # reconnects reuse the cached token while it has at least this long to live
+MAX_TOKENS_PER_HOUR = 20  # each token is a write (POST /realtime/token); past this the feed stays REST-only
+_AUTH_HINTS = ("unauthori", "auth", "token", "jwt", "expired", "forbidden", "permission", "denied")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -367,9 +371,19 @@ class _Stall(Exception):
 class RealtimeFeed:
     """Async iterator of normalized Realtime events with reconnect, rejoin, heartbeat and token refresh.
 
+    `markets` maps MARKET id -> exchange id: topics are `tournament:{tid}:market:{market_id}` and the exchange id
+    names books that arrive without one.
+
     Degrades gracefully: when the token call or the socket fails, `events()` simply yields nothing while it
     retries with exponential backoff (1 s -> 60 s); the trader keeps polling REST meanwhile. Each (re)connect
     yields `ResyncNeeded(None, reason="connected")` so the consumer reloads every subscribed book.
+
+    Tokens cost a write each, so: a reconnect reuses the cached token while it has `token_reuse_min_s` left (a
+    fresh one is fetched near expiry, after an auth-type join failure, or when the socket could not be opened
+    at all); the backoff only resets after a healthy connection (a channel joined, or `healthy_after_s`
+    connected), so a socket that accepts and drops keeps backing off; at most `max_tokens_per_hour` are
+    requested (then the feed waits, REST-only); and the in-session refresh runs as a background task so a slow
+    or rate-limited token call never stalls heartbeats or reads.
     """
 
     def __init__(
@@ -389,6 +403,11 @@ class RealtimeFeed:
         tick_s: float = 1.0,
         reconnect_min_s: float = 1.0,
         reconnect_max_s: float = 60.0,
+        token_reuse_min_s: float = TOKEN_REUSE_MIN_S,
+        max_tokens_per_hour: int = MAX_TOKENS_PER_HOUR,
+        token_timeout_s: float = 150.0,
+        healthy_after_s: float = 60.0,
+        auth_refresh_min_s: float = 300.0,
         connect: Callable[..., Any] | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
@@ -405,6 +424,11 @@ class RealtimeFeed:
         self.tick_s = tick_s
         self.reconnect_min_s = reconnect_min_s
         self.reconnect_max_s = reconnect_max_s
+        self.token_reuse_min_s = token_reuse_min_s
+        self.max_tokens_per_hour = max(1, int(max_tokens_per_hour))
+        self.token_timeout_s = token_timeout_s
+        self.healthy_after_s = healthy_after_s
+        self.auth_refresh_min_s = auth_refresh_min_s
         self._connect = connect or ws_connect
         self._clock = clock or time.monotonic
         # The handshake URL carries the anon key: keep the websockets library's DEBUG chatter off.
@@ -421,6 +445,11 @@ class RealtimeFeed:
         self.connected = False
         self.connections = 0
         self.token: RealtimeToken | None = None
+        self.token_requests = 0
+        self._token_reusable = False
+        self._token_stamps: deque[float] = deque()
+        self._healthy = False
+        self._last_auth_refresh: float | None = None
         self._markets_dirty = False
         if markets:
             self.set_markets(markets)
@@ -460,22 +489,38 @@ class RealtimeFeed:
         self._stop.clear()
         backoff = self.reconnect_min_s
         while not self._stop.is_set():
-            try:
-                token = await self.token_provider()
-            except Exception as e:  # noqa: BLE001
-                log.warning("realtime token fetch failed (%s); retry in %.0fs", type(e).__name__, backoff)
-                if await self._sleep(backoff):
-                    break
-                backoff = min(backoff * 2, self.reconnect_max_s)
-                continue
-            self.token = token
+            token = self._reusable_token()
+            if token is None:
+                wait = self._token_slot_in()
+                if wait > 0:
+                    log.warning(
+                        "realtime: %d token requests in the last hour; REST only for %.0fs",
+                        len(self._token_stamps),
+                        wait,
+                    )
+                    if await self._sleep(wait):
+                        break
+                    continue
+                try:
+                    token = await self._fetch_token()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("realtime token fetch failed (%s); retry in %.0fs", type(e).__name__, backoff)
+                    if await self._sleep(backoff):
+                        break
+                    backoff = min(backoff * 2, self.reconnect_max_s)
+                    continue
             if token.user_channel and not self.user_channel:
                 self.user_channel = token.user_channel
             url = websocket_url(token.supabase_url, token.anon_key)
+            opened = False
+            opened_at = self._clock()
+            self._healthy = False
             try:
                 async with self._connect(
                     url, open_timeout=20, close_timeout=5, max_size=8 * 1024 * 1024
                 ) as ws:
+                    opened = True
+                    opened_at = self._clock()
                     self._ws = ws
                     self.connected = True
                     self.connections += 1
@@ -484,7 +529,6 @@ class RealtimeFeed:
                     self.last_message_at = self._clock()
                     log.info("realtime connected (%d channels to join)", len(self.topics()))
                     yield ResyncNeeded(None, reason="connected" if self.connections == 1 else "reconnected")
-                    backoff = self.reconnect_min_s
                     session = self._session(ws, token)
                     try:
                         async for ev in session:
@@ -501,11 +545,44 @@ class RealtimeFeed:
                 self.connected = False
                 self._ws = None
                 self.joined.clear()
+            if not opened:
+                # the socket never opened: the token's URL / key may be stale, so fetch a fresh one next time
+                self._token_reusable = False
+            if self._healthy or (opened and self._clock() - opened_at >= self.healthy_after_s):
+                backoff = self.reconnect_min_s
             if self._stop.is_set():
                 break
             if await self._sleep(backoff):
                 break
             backoff = min(backoff * 2, self.reconnect_max_s)
+
+    # -- tokens ------------------------------------------------------------------------------
+    def _reusable_token(self) -> RealtimeToken | None:
+        tok = self.token
+        if tok is not None and self._token_reusable and tok.seconds_left > self.token_reuse_min_s:
+            return tok
+        return None
+
+    def _token_slot_in(self) -> float:
+        """Seconds until another token request fits the hourly cap (0 = now)."""
+        now = self._clock()
+        while self._token_stamps and now - self._token_stamps[0] >= 3600.0:
+            self._token_stamps.popleft()
+        if len(self._token_stamps) < self.max_tokens_per_hour:
+            return 0.0
+        return max(1.0, self._token_stamps[0] + 3600.0 - now)
+
+    async def _fetch_token(self) -> RealtimeToken:
+        """One token request (a write on the exchange), bounded in time and counted against the hourly cap."""
+        self._token_stamps.append(self._clock())
+        self.token_requests += 1
+        token = await asyncio.wait_for(self.token_provider(), timeout=self.token_timeout_s)
+        self.token = token
+        self._token_reusable = True
+        return token
+
+    def _refresh_delay(self, token: RealtimeToken) -> float:
+        return min(self.token_refresh_s, max(60.0, token.seconds_left - 600.0))
 
     async def _sleep(self, seconds: float) -> bool:
         """Sleep unless stopped; True when stop() was called."""
@@ -539,7 +616,8 @@ class RealtimeFeed:
         queue: list[str] = self.topics()
         self._markets_dirty = False
         last_heartbeat = now
-        refresh_at = now + min(self.token_refresh_s, max(60.0, token.seconds_left - 600.0))
+        refresh_at = now + self._refresh_delay(token)
+        refresh_task: asyncio.Task[RealtimeToken] | None = None
         heartbeat_ref: str | None = None
 
         async def send_joins() -> None:
@@ -550,117 +628,151 @@ class RealtimeFeed:
                 ref = await self._send(ws, topic, "phx_join", join_payload(access_token))
                 pending[ref] = (topic, self._clock())
 
-        await send_joins()
-        while not self._stop.is_set():
-            try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=self.tick_s)
-            except TimeoutError:
-                raw = None
-            now = self._clock()
-            if raw is not None:
-                self.last_message_at = now
-                topic, event, payload, ref = decode_frame(raw)
-                if event == "phx_reply":
-                    if ref is not None and ref in pending:
-                        jt, _ = pending.pop(ref)
-                        status = (
-                            str(pick(payload, "status", default="")).lower()
-                            if isinstance(payload, Mapping)
-                            else ""
-                        )
-                        if status == "ok":
-                            self.joined.add(jt)
-                            failed.pop(jt, None)
-                            failures.pop(jt, None)
-                        else:
-                            reason = pick(
-                                payload, "response.reason", "response.message", "response", default=payload
-                            )
-                            log.log(
-                                logging.WARNING if failures.get(jt, 0) < 2 else logging.DEBUG,
-                                "realtime join failed for %s: %s",
-                                _topic_label(jt),
-                                _short(reason),
-                            )
-                            schedule_retry(jt)
-                        await send_joins()
-                    elif ref is not None and ref == heartbeat_ref:
-                        heartbeat_ref = None
-                elif event in ("phx_error", "phx_close"):
-                    if topic in self.joined:
-                        log.warning(
-                            "realtime channel %s closed by server (%s); rejoining", _topic_label(topic), event
-                        )
-                        self.joined.discard(topic)
-                        if topic not in queue:
-                            queue.append(topic)
-                        await send_joins()
-                elif event in ("system", "presence_state", "presence_diff"):
-                    log.debug("realtime %s on %s: %s", event, _topic_label(topic), _short(payload))
-                else:
-                    inner_event, inner_payload = unwrap_broadcast(event, payload)
-                    if inner_event:
-                        for ev in parse_broadcast(
-                            inner_event,
-                            inner_payload,
-                            topic=topic,
-                            tracker=self.tracker,
-                            markets=self._markets,
-                        ):
-                            yield ev
-
-            # -- housekeeping -------------------------------------------------------------------
-            if now - last_heartbeat >= self.heartbeat_s:
-                if heartbeat_ref is not None:
-                    raise _Stall("previous heartbeat unanswered")
-                heartbeat_ref = await self._send(ws, "phoenix", "heartbeat", {})
-                last_heartbeat = now
-            for ref, (jt, sent_at) in list(pending.items()):
-                if now - sent_at > self.join_timeout_s:
-                    pending.pop(ref, None)
-                    log.warning("realtime join timed out for %s", _topic_label(jt))
-                    schedule_retry(jt)
-            for jt, retry_at in list(failed.items()):
-                if now >= retry_at and jt not in queue and jt not in self.joined:
-                    failed.pop(jt, None)
-                    queue.append(jt)
-            if self._markets_dirty:
-                self._markets_dirty = False
-                wanted = set(self.topics())
-                for jt in list(self.joined):
-                    if jt not in wanted:
-                        self.joined.discard(jt)
-                        try:
-                            await self._send(ws, jt, "phx_leave", {})
-                        except Exception:  # noqa: BLE001
-                            pass
-                queue = [t for t in queue if t in wanted]
-                for jt in wanted:
-                    if (
-                        jt not in self.joined
-                        and jt not in queue
-                        and all(jt != p[0] for p in pending.values())
-                    ):
-                        queue.append(jt)
-            if queue and len(pending) < self.join_batch:
-                await send_joins()
-            if self.joined and self.last_message_at is not None and now - self.last_message_at > self.stall_s:
-                raise _Stall(f"no message for {self.stall_s:.0f}s")
-            if now >= refresh_at:
+        try:
+            await send_joins()
+            while not self._stop.is_set():
                 try:
-                    token = await self.token_provider()
-                except Exception as e:  # noqa: BLE001
-                    log.warning("realtime token refresh failed (%s)", type(e).__name__)
-                    if self.token is not None and self.token.seconds_left < 120:
-                        raise _Stall("token about to expire and refresh failed") from e
-                    refresh_at = now + 60.0
-                else:
-                    self.token = token
-                    access_token = token.token
-                    refresh_at = now + min(self.token_refresh_s, max(60.0, token.seconds_left - 600.0))
+                    raw = await asyncio.wait_for(ws.recv(), timeout=self.tick_s)
+                except TimeoutError:
+                    raw = None
+                now = self._clock()
+                if raw is not None:
+                    self.last_message_at = now
+                    topic, event, payload, ref = decode_frame(raw)
+                    if event == "phx_reply":
+                        if ref is not None and ref in pending:
+                            jt, _ = pending.pop(ref)
+                            status = (
+                                str(pick(payload, "status", default="")).lower()
+                                if isinstance(payload, Mapping)
+                                else ""
+                            )
+                            if status == "ok":
+                                self.joined.add(jt)
+                                self._healthy = True
+                                failed.pop(jt, None)
+                                failures.pop(jt, None)
+                            else:
+                                reason = pick(
+                                    payload, "response.reason", "response.message", "response", default=payload
+                                )
+                                log.log(
+                                    logging.WARNING if failures.get(jt, 0) < 2 else logging.DEBUG,
+                                    "realtime join failed for %s: %s",
+                                    _topic_label(jt),
+                                    _short(reason),
+                                )
+                                schedule_retry(jt)
+                                if refresh_task is None and _is_auth_failure(reason) and self._auth_refresh_ok(now):
+                                    # the token may be bad: refresh now (in the background), then retry the joins
+                                    self._last_auth_refresh = now
+                                    refresh_at = now
+                            await send_joins()
+                        elif ref is not None and ref == heartbeat_ref:
+                            heartbeat_ref = None
+                    elif event in ("phx_error", "phx_close"):
+                        if topic in self.joined:
+                            log.warning(
+                                "realtime channel %s closed by server (%s); rejoining", _topic_label(topic), event
+                            )
+                            self.joined.discard(topic)
+                            if topic not in queue:
+                                queue.append(topic)
+                            await send_joins()
+                    elif event in ("system", "presence_state", "presence_diff"):
+                        log.debug("realtime %s on %s: %s", event, _topic_label(topic), _short(payload))
+                    else:
+                        inner_event, inner_payload = unwrap_broadcast(event, payload)
+                        if inner_event:
+                            for ev in parse_broadcast(
+                                inner_event,
+                                inner_payload,
+                                topic=topic,
+                                tracker=self.tracker,
+                                markets=self._markets,
+                            ):
+                                yield ev
+
+                # -- housekeeping -------------------------------------------------------------------
+                if now - last_heartbeat >= self.heartbeat_s:
+                    if heartbeat_ref is not None:
+                        raise _Stall("previous heartbeat unanswered")
+                    heartbeat_ref = await self._send(ws, "phoenix", "heartbeat", {})
+                    last_heartbeat = now
+                for ref, (jt, sent_at) in list(pending.items()):
+                    if now - sent_at > self.join_timeout_s:
+                        pending.pop(ref, None)
+                        log.warning("realtime join timed out for %s", _topic_label(jt))
+                        schedule_retry(jt)
+                for jt, retry_at in list(failed.items()):
+                    if now >= retry_at and jt not in queue and jt not in self.joined:
+                        failed.pop(jt, None)
+                        queue.append(jt)
+                if self._markets_dirty:
+                    self._markets_dirty = False
+                    wanted = set(self.topics())
                     for jt in list(self.joined):
-                        await self._send(ws, jt, "access_token", {"access_token": access_token})
-                    log.info("realtime token refreshed on %d channels", len(self.joined))
+                        if jt not in wanted:
+                            self.joined.discard(jt)
+                            try:
+                                await self._send(ws, jt, "phx_leave", {})
+                            except Exception:  # noqa: BLE001
+                                pass
+                    queue = [t for t in queue if t in wanted]
+                    for jt in wanted:
+                        if (
+                            jt not in self.joined
+                            and jt not in queue
+                            and all(jt != p[0] for p in pending.values())
+                        ):
+                            queue.append(jt)
+                # token refresh: a background task, so a slow / rate-limited token call never blocks this loop
+                if refresh_task is None and now >= refresh_at:
+                    wait = self._token_slot_in()
+                    if wait > 0:
+                        log.warning("realtime token refresh deferred: hourly token cap reached")
+                        refresh_at = now + min(wait, 60.0)
+                    else:
+                        refresh_task = asyncio.create_task(self._fetch_token(), name="realtime-token")
+                if refresh_task is not None and refresh_task.done():
+                    task, refresh_task = refresh_task, None
+                    try:
+                        new_token = task.result()
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("realtime token refresh failed (%s)", type(e).__name__)
+                        if self.token is not None and self.token.seconds_left < 120:
+                            raise _Stall("token about to expire and refresh failed") from e
+                        refresh_at = now + 60.0
+                    else:
+                        access_token = new_token.token
+                        refresh_at = now + self._refresh_delay(new_token)
+                        for jt in list(self.joined):
+                            await self._send(ws, jt, "access_token", {"access_token": access_token})
+                        for jt in list(failed):  # joins refused on the old token: retry now with the new one
+                            failed.pop(jt, None)
+                            if jt not in queue and jt not in self.joined:
+                                queue.append(jt)
+                        log.info("realtime token refreshed on %d channels", len(self.joined))
+                if queue and len(pending) < self.join_batch:
+                    await send_joins()
+                if (
+                    self.joined
+                    and self.last_message_at is not None
+                    and now - self.last_message_at > self.stall_s
+                ):
+                    raise _Stall(f"no message for {self.stall_s:.0f}s")
+        finally:
+            if refresh_task is not None and not refresh_task.done():
+                refresh_task.cancel()
+
+    def _auth_refresh_ok(self, now: float) -> bool:
+        return self._last_auth_refresh is None or now - self._last_auth_refresh >= self.auth_refresh_min_s
+
+
+def _is_auth_failure(reason: Any) -> bool:
+    """A join refusal that a fresh token might cure (expired / invalid JWT, unauthorized)."""
+    text = str(reason).lower()
+    return any(h in text for h in _AUTH_HINTS)
 
 
 def _short(v: Any, n: int = 160) -> str:

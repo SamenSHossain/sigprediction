@@ -245,5 +245,5 @@ async def test_slow_token_refresh_does_not_stall_the_session(start_server):
         return release.is_set() and len(fake.access_tokens) >= 2
 
     await collect(feed, heartbeats_continue, timeout=4.0)
-    assert {tok for _, tok in fake.access_tokens} == {"jwt-2"}
+    assert [tok for _, tok in fake.access_tokens][:2] == ["jwt-2", "jwt-2"]  # pushed once the refresh landed
     assert fake.connections == 1

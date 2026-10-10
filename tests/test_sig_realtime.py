@@ -539,7 +539,9 @@ async def test_feed_reconnects_and_rejoins_everything(fake_server):
     assert fake.connections == 2 and len(fake.joins) == 2
     assert sorted(fake.joins[0]) == sorted(fake.joins[1])  # full rejoin, including the user channel
     assert "realtime:user:prof-42" in fake.joins[1]
-    assert feed.connections == 2 and tokens.calls == 2  # a fresh token per connection
+    # one token for both connections: it is still valid, and each token request costs a write
+    assert feed.connections == 2 and tokens.calls == 1
+    assert all(t == "jwt-1" for t in fake.join_tokens)
 
 
 async def test_feed_refreshes_token_on_joined_channels(fake_server):
