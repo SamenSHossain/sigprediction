@@ -177,7 +177,8 @@ def test_shipped_manual_ratings_cover_the_universe():
     by = as_map(rows)
     assert by[("SEN-TX", "cook")].rating == "Toss-up" and by[("SEN-TX", "cook")].ts == datetime(2026, 10, 6, tzinfo=UTC)
     assert by[("SEN-TX", "inside")].rating == "Tilt R" and by[("SEN-TX", "inside")].prob_dem == pytest.approx(0.42)
-    assert by[("CONTROL-SENATE", "manual")].prob_dem == pytest.approx(0.63)  # explicit override
+    ctrl = by[("CONTROL-SENATE", "manual")]
+    assert ctrl.prob_dem == pytest.approx(0.63) and ctrl.rating == "explicit 0.63"  # explicit override, unparseable label
     assert by[("CONTROL-HOUSE", "manual")].prob_dem == pytest.approx(0.91)
     assert by[("SEN-WY", "manual")].rating == "Safe R" and by[("SEN-WY", "manual")].ts == datetime(2026, 10, 9, tzinfo=UTC)
     assert all(0.0 <= r.prob_dem <= 1.0 for r in rows)
@@ -205,7 +206,7 @@ def test_manual_loader_edge_cases(tmp_path):
     rows = P.load_manual_ratings(p, ratings_prob=PROB, now=NOW)
     assert [(r.race_id, r.source, r.rating, r.prob_dem) for r in rows] == [
         ("SEN-GA", "cook", "Likely D", 0.85),
-        ("SEN-NE", "manual", "Weird", 0.2),
+        ("SEN-NE", "manual", "explicit 0.20", 0.2),
     ]
     assert rows[0].ts == datetime(2026, 9, 30, tzinfo=UTC)
     polls = P.load_manual_polls(p)

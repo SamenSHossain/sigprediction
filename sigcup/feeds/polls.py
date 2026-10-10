@@ -746,11 +746,13 @@ def load_manual_ratings(
         if norm is None and explicit is None:
             log.warning("manual rating for %s has neither a parsable rating nor prob_dem", rid)
             continue
-        label = canonical_rating(*norm) if norm else rating_text.strip() or "Manual"
         prob = explicit if explicit is not None else rating_prob_dem(norm[0], norm[1], ratings_prob)
         if prob is None or not 0.0 <= prob <= 1.0:
             log.warning("manual rating for %s cannot be mapped to P(D): %r", rid, rating_text)
             continue
+        # An explicit prob_dem is stored under a label without level/party words ("explicit 0.63"):
+        # sigcup.trader.fairvalue parses the label first and only falls back to prob_dem when it cannot.
+        label = f"explicit {prob:.2f}" if explicit is not None else canonical_rating(*norm)
         out.append(RatingRow(race_id=rid, source=source, rating=label[:32], prob_dem=float(prob), ts=ts, raw=rating_text))
     return out
 

@@ -7,7 +7,8 @@
 #   source     who said it: cook | sabato | inside | split | rttwh | manual (default manual)
 #   as_of      YYYY-MM-DD (defaults to the top-level as_of); stored as the Rating.ts (00:00 UTC)
 #   prob_dem   optional explicit P(Democrat) overriding the rating -> probability table in settings.yaml
-#              (fairvalue.ratings_prob: safe .97, likely .85, lean .68, tilt .58, tossup .50)
+#              (fairvalue.ratings_prob: safe .97, likely .85, lean .68, tilt .58, tossup .50); stored with the
+#              label "explicit 0.63" so the model uses the number rather than re-parsing the rating word
 #   note       free text
 #
 # Provenance: docs/research/platform.md section 6 (Cook Oct 6 Senate, Cook Oct 1 governors, Cook Oct 9 House,
