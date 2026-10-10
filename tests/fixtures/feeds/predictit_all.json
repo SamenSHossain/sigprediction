@@ -1,0 +1,15 @@
+{
+  "_comment": "SYNTHETIC fixture: PredictIt /api/marketdata/all/ shape. bestSellYesCost = bid, bestBuyYesCost = ask.",
+  "markets": [
+    {
+      "id": 8001, "name": "Which party will win the 2026 Texas Senate race?", "shortName": "TX Senate 2026",
+      "url": "https://www.predictit.org/markets/detail/8001", "status": "Open", "timeStamp": "2026-10-10T12:00:00",
+      "contracts": [
+        {"id": 31001, "name": "Democratic", "shortName": "Democratic", "status": "Open", "lastTradePrice": 0.66,
+         "bestBuyYesCost": 0.67, "bestSellYesCost": 0.65, "bestBuyNoCost": 0.35, "bestSellNoCost": 0.33},
+        {"id": 31002, "name": "Republican", "shortName": "Republican", "status": "Open", "lastTradePrice": 0.35,
+         "bestBuyYesCost": null, "bestSellYesCost": 0.33, "bestBuyNoCost": 0.67, "bestSellNoCost": 0.64}
+      ]
+    }
+  ]
+}

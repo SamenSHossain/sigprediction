@@ -1,0 +1,7 @@
+{
+  "tweets": [
+    {"id": "1841000000000000004", "text": "Vote Ossoff! @ossoff", "createdAt": "Sat Oct 10 03:00:00 +0000 2026", "author": {"id": "888", "userName": "ga_voter_2026", "createdAt": "Fri Jan 03 00:00:00 +0000 2025"}}
+  ],
+  "has_next_page": false,
+  "next_cursor": ""
+}

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Atlanta Journal-Constitution Politics</title>
+    <link>https://www.ajc.com/politics/</link>
+    <description>Georgia politics</description>
+    <item>
+      <title>Jon Ossoff rallies in Savannah ahead of debate</title>
+      <link>https://www.ajc.com/politics/ossoff-savannah-rally/</link>
+      <guid>https://www.ajc.com/politics/ossoff-savannah-rally/</guid>
+      <pubDate>Sat, 10 Oct 2026 09:30:00 GMT</pubDate>
+      <description><![CDATA[<p>The senator drew a crowd of <b>2,000</b> on the riverfront.</p>]]></description>
+    </item>
+    <item>
+      <title>Braves clinch the division</title>
+      <link>https://www.ajc.com/sports/braves-clinch/</link>
+      <guid>braves-clinch-2026</guid>
+      <pubDate>Sat, 10 Oct 2026 08:00:00 GMT</pubDate>
+      <description>Sports, not politics.</description>
+    </item>
+    <item>
+      <title>Carter is up in the Georgia Senate race, new survey says</title>
+      <link>https://www.ajc.com/politics/carter-survey/</link>
+      <pubDate>Sat, 10 Oct 2026 07:00:00 GMT</pubDate>
+      <description>A survey of 800 likely voters.</description>
+    </item>
+    <item>
+      <link>https://www.ajc.com/politics/untitled/</link>
+      <description>No title here, must be dropped.</description>
+    </item>
+  </channel>
+</rss>

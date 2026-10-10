@@ -1,0 +1,8 @@
+{
+  "kind": "youtube#commentThreadListResponse",
+  "items": [
+    {"kind": "youtube#commentThread", "id": "Ugx001", "snippet": {"videoId": "vid001", "topLevelComment": {"kind": "youtube#comment", "id": "Ugx001", "snippet": {"videoId": "vid001", "textDisplay": "Ossoff won this debate easily", "textOriginal": "Ossoff won this debate easily", "authorDisplayName": "Peach State Voter", "authorChannelId": {"value": "UCauthor1"}, "publishedAt": "2026-10-09T20:00:00Z"}}}},
+    {"kind": "youtube#commentThread", "id": "Ugx002", "snippet": {"videoId": "vid001", "topLevelComment": {"kind": "youtube#comment", "id": "Ugx002", "snippet": {"videoId": "vid001", "textOriginal": "first", "authorDisplayName": "bot98765432", "authorChannelId": {"value": "UCauthor2"}, "publishedAt": "2026-10-09T20:01:00Z"}}}},
+    {"kind": "youtube#commentThread", "id": "Ugx003", "snippet": {"videoId": "vid001", "topLevelComment": {"kind": "youtube#comment", "id": "Ugx003", "snippet": {"textOriginal": "", "authorDisplayName": "empty"}}}}
+  ]
+}

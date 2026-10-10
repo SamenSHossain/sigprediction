@@ -1,0 +1,8 @@
+{
+  "articles": [
+    {"url": "https://www.ajc.com/politics/ossoff-poll-2026/", "url_mobile": "", "title": "New poll shows Jon Ossoff ahead in Georgia Senate race", "seendate": "20261010T120000Z", "socialimage": "", "domain": "ajc.com", "language": "English", "sourcecountry": "United States"},
+    {"url": "https://www.ajc.com/politics/ossoff-poll-2026/", "title": "Duplicate url, must be dropped", "seendate": "20261010T121500Z", "domain": "ajc.com"},
+    {"url": "https://example.com/no-title", "seendate": "20261010T110000Z", "domain": "example.com"},
+    {"url": "https://www.texastribune.org/2026/10/10/texas-senate-debate/", "title": "Texas Senate debate: candidates clash over the border", "seendate": "20261010T100000Z", "domain": "texastribune.org", "snippet": "The two candidates traded barbs for ninety minutes."}
+  ]
+}

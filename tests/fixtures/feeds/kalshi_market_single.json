@@ -1,0 +1,7 @@
+{
+  "_comment": "SYNTHETIC fixture: Kalshi GET /markets/{ticker} wraps the record in 'market'.",
+  "market": {
+    "ticker": "CONTROLS-2026-D", "event_ticker": "CONTROLS-2026", "title": "Senate control: Democrats",
+    "status": "active", "yes_bid": 63, "yes_ask": 64, "last_price": 64, "volume": 2500000, "open_interest": 900000
+  }
+}

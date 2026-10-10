@@ -1,0 +1,9 @@
+{
+  "data": [
+    {"id": "1841000000000000001", "text": "Jon Ossoff just crushed the debate #GASen", "created_at": "2026-10-10T01:02:03.000Z", "author_id": "12345", "lang": "en"},
+    {"id": "1841000000000000002", "text": "Thread on tonight's results coming up", "created_at": "2026-10-10T01:02:04.000Z", "author_id": "999", "lang": "en"},
+    {"id": "1841000000000000003", "text": "", "created_at": "2026-10-10T01:02:05.000Z", "author_id": "999"}
+  ],
+  "includes": {"users": [{"id": "12345", "username": "gapolitico", "created_at": "2015-04-01T00:00:00.000Z"}]},
+  "meta": {"newest_id": "1841000000000000002", "result_count": 2}
+}

@@ -1,0 +1,12 @@
+[
+  {"id": "101", "exchangeId": "1101", "title": "Will the Democratic Party win the Texas Senate race?", "status": "open", "settlementDate": "2026-11-04T17:00:00Z", "resolution": "YES follows the winning candidate's affiliation with the specified party."},
+  {"id": "102", "exchangeId": "1102", "title": "Will the Republican Party win the Texas Senate race?", "status": "open", "settlementDate": "2026-11-04T17:00:00Z"},
+  {"id": "103", "exchangeId": "1103", "title": "Will the Republican Party win the Georgia Governor race?", "status": "open"},
+  {"id": "104", "exchangeId": "1104", "title": "Will the Democratic Party win the Georgia Governor race?", "status": "open"},
+  {"id": "105", "exchangeId": "1105", "title": "Will the Democratic Party win the PA-08 House race?", "status": "open"},
+  {"id": "106", "exchangeId": "1106", "title": "Will the Democratic Party control the Senate?", "status": "open"},
+  {"id": "107", "exchangeId": "1107", "title": "Will the Republican Party control the Senate?", "status": "open"},
+  {"id": "108", "exchangeId": "1108", "title": "Will Dan Osborn (I) win the Nebraska Senate race?", "status": "open"},
+  {"id": "109", "exchangeId": "1109", "title": "Will the Democratic Party win the Florida Senate special election?", "status": "open"},
+  {"id": "110", "exchangeId": "1110", "title": "Will turnout exceed 50% in the 2026 midterms?", "status": "open"}
+]

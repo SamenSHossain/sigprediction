@@ -1,0 +1,7 @@
+{
+  "posts": [
+    {"uri": "at://did:plc:abc123xyz/app.bsky.feed.post/3ksearch1", "cid": "bafyabc", "author": {"did": "did:plc:abc123xyz", "handle": "reporter.bsky.social", "createdAt": "2023-05-01T00:00:00.000Z"}, "record": {"$type": "app.bsky.feed.post", "text": "New AJC poll: Jon Ossoff 49, Buddy Carter 45", "createdAt": "2026-10-10T04:30:00.000Z"}, "indexedAt": "2026-10-10T04:30:01.000Z"},
+    {"uri": "not-an-at-uri", "record": {"text": "garbage"}}
+  ],
+  "cursor": "25"
+}

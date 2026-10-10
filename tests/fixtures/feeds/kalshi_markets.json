@@ -1,0 +1,26 @@
+{
+  "_comment": "SYNTHETIC fixture: shape modelled on Kalshi trade-api/v2 GET /markets?tickers= (integer cents plus *_dollars strings on newer payloads). Not real data.",
+  "markets": [
+    {
+      "ticker": "SENATETX-26-D", "event_ticker": "SENATETX-26", "title": "Texas Senate: Democratic",
+      "yes_sub_title": "Democratic", "status": "active", "yes_bid": 66, "yes_ask": 68, "no_bid": 32, "no_ask": 34,
+      "last_price": 67, "volume": 184233, "volume_24h": 5120, "open_interest": 92110,
+      "close_time": "2026-11-04T05:00:00Z", "yes_bid_dollars": "0.66", "yes_ask_dollars": "0.68"
+    },
+    {
+      "ticker": "SENATETX-26-R", "event_ticker": "SENATETX-26", "title": "Texas Senate: Republican",
+      "status": "active", "yes_bid": 32, "yes_ask": 34, "no_bid": 66, "no_ask": 68, "last_price": 33,
+      "volume": 0, "open_interest": 90000
+    },
+    {
+      "ticker": "GOVPARTYGA-26-R", "event_ticker": "GOVPARTYGA-26", "title": "Georgia Governor: Republican",
+      "status": "active", "yes_bid_dollars": "0.55", "yes_ask_dollars": "0.57", "last_price_dollars": "0.56",
+      "volume_fp": "12000.00", "open_interest_fp": "8000.00"
+    },
+    {
+      "ticker": "SENATEGA-24-D", "event_ticker": "SENATEGA-24", "title": "Georgia Senate: Democratic",
+      "status": "settled", "result": "no", "yes_bid": 0, "yes_ask": 1, "last_price": 1, "volume": 10
+    }
+  ],
+  "cursor": ""
+}

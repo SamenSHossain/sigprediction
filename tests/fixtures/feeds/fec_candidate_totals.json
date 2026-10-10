@@ -1,0 +1,13 @@
+{
+  "_comment": "SYNTHETIC fixture: api.open.fec.gov /v1/candidates/totals/ shape (names/amounts invented).",
+  "api_version": "1.0",
+  "pagination": {"count": 6, "page": 1, "pages": 1, "per_page": 100},
+  "results": [
+    {"candidate_id": "S6TX00123", "name": "TALARICO, JAMES", "party": "DEM", "party_full": "DEMOCRATIC PARTY", "state": "TX", "district": "00", "office": "S", "cycle": 2026, "election_year": 2026, "receipts": 24500000.12, "disbursements": 18000000.5, "cash_on_hand_end_period": 6500000.0, "coverage_end_date": "2026-09-30"},
+    {"candidate_id": "S6TX00456", "name": "PAXTON, KEN", "party": "REP", "state": "TX", "district": "00", "office": "S", "cycle": 2026, "receipts": 15000000.0, "disbursements": 12000000.0, "cash_on_hand_end_period": 3000000.0},
+    {"candidate_id": "S6TX00789", "name": "MINOR, SOMEBODY", "party": "DEM", "state": "TX", "district": "00", "office": "S", "cycle": 2026, "receipts": 120000.0, "disbursements": 100000.0, "cash_on_hand_end_period": 20000.0},
+    {"candidate_id": "H6PA08001", "name": "BRESNAHAN, ROB", "party": "REP", "state": "PA", "district": "08", "office": "H", "cycle": 2026, "receipts": 4100000.0, "disbursements": 3000000.0, "cash_on_hand_end_period": 1100000.0},
+    {"candidate_id": "H6AK00001", "name": "ATLARGE, CANDIDATE", "party": "DEM", "state": "AK", "district": "00", "office": "H", "cycle": 2026, "receipts": 900000.0},
+    {"candidate_id": "P60000001", "name": "PRESIDENT, SOMEONE", "party": "IND", "state": "US", "district": null, "office": "P", "cycle": 2028, "receipts": 1.0}
+  ]
+}

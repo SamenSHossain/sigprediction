@@ -1,0 +1,27 @@
+[
+  {
+    "_comment": "SYNTHETIC fixture: Polymarket Gamma GET /markets?condition_ids= shape (JSON-encoded string arrays).",
+    "id": "501234",
+    "question": "Will the Democratic Party win the Texas Senate race in 2026?",
+    "conditionId": "0xabc0000000000000000000000000000000000000000000000000000000000001",
+    "slug": "will-the-democratic-party-win-the-texas-senate-race-in-2026",
+    "outcomes": "[\"Yes\", \"No\"]",
+    "outcomePrices": "[\"0.665\", \"0.335\"]",
+    "clobTokenIds": "[\"111\", \"222\"]",
+    "bestBid": 0.66, "bestAsk": 0.67, "lastTradePrice": 0.665,
+    "liquidityNum": 251000.5, "volumeNum": 1830000.25,
+    "active": true, "closed": false, "endDate": "2026-11-04T00:00:00Z",
+    "events": [{"title": "Texas Senate Election Winner 2026", "slug": "texas-senate-election-winner-2026"}]
+  },
+  {
+    "id": "501235",
+    "question": "Will the Republican Party win the Georgia Governor race in 2026?",
+    "conditionId": "0xdef0000000000000000000000000000000000000000000000000000000000002",
+    "slug": "will-the-republican-party-win-the-georgia-governor-race-in-2026",
+    "outcomes": ["No", "Yes"],
+    "outcomePrices": ["0.45", "0.55"],
+    "clobTokenIds": ["333", "444"],
+    "liquidityNum": 80000, "volumeNum": 400000,
+    "active": true, "closed": false
+  }
+]

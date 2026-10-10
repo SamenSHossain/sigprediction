@@ -1,0 +1,18 @@
+{
+  "_comment": "SYNTHETIC fixture: Gamma GET /public-search?q= returns events with nested markets.",
+  "events": [
+    {
+      "id": "9001", "title": "Nebraska Senate Election Winner 2026", "slug": "nebraska-senate-election-winner-2026",
+      "markets": [
+        {"id": "7001", "question": "Will Dan Osborn win the 2026 Nebraska Senate race?", "conditionId": "0x0sb", "slug": "will-dan-osborn-win-the-2026-nebraska-senate-race",
+         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.21\", \"0.79\"]", "clobTokenIds": "[\"901\", \"902\"]", "volumeNum": 120000, "active": true, "closed": false},
+        {"id": "7002", "question": "Will a Republican win the 2026 Nebraska Senate race?", "conditionId": "0x0rep", "slug": "will-a-republican-win-the-2026-nebraska-senate-race",
+         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.78\", \"0.22\"]", "clobTokenIds": "[\"903\", \"904\"]", "volumeNum": 150000, "active": true, "closed": false},
+        {"id": "7003", "question": "Will a Republican win the 2026 Nebraska Senate primary?", "conditionId": "0x0pri", "slug": "nebraska-senate-primary",
+         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.99\", \"0.01\"]", "clobTokenIds": "[\"905\", \"906\"]", "active": false, "closed": true}
+      ]
+    }
+  ],
+  "tags": [],
+  "profiles": []
+}

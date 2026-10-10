@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -695,8 +696,12 @@ def race_id_from_text(text: str, chamber: str | None = None) -> str | None:
         elif re.search(r"\bhouse\b|district|\b[A-Z]{2}-\d{1,2}\b", t):
             ch = "house"
     dm = _REF_DISTRICT_RE.search(t)
-    if dm and dm.group(1) in STATES and ch in (None, "house"):
-        return make_race_id("house", dm.group(1), format_district(dm.group(2)))
+    if dm and dm.group(1) in STATES:
+        # an explicit hyphenated code ('PA-08') is a House district whatever the table's chamber hint;
+        # a whitespace form ('PA 8') only counts on House (or unhinted) tables
+        hyphenated = "-" in dm.group(0)
+        if ch in (None, "house") or (hyphenated and dm.group(2).isdigit()):
+            return make_race_id("house", dm.group(1), format_district(dm.group(2)))
     state = find_state(t)
     if state is None:
         return None
@@ -873,3 +878,85 @@ def universe_stats(data: dict[str, Any]) -> UniverseStats:
             st.with_kalshi += bool(leg.get("kalshi_ticker"))
             st.with_polymarket += bool(leg.get("polymarket_condition_id"))
     return st
+
+
+# ---------------------------------------------------------------------------------------------
+# DB row values (pure: builds plain dicts for sigcup.db.models.Race; the callers own the session)
+# ---------------------------------------------------------------------------------------------
+
+
+def race_row_values(race_id: str, entry: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Column values for a ``Race`` row from a races.yaml entry (None when the id is not a race id).
+
+    Only the race-level fields are returned (``exclusive`` / ``exhaustive`` are copied as stored, i.e.
+    whatever the bootstrap derived from the relationships API). Markets are handled separately.
+    """
+    key = parse_race_id(race_id)
+    if key is None:
+        return None
+    e: Mapping[str, Any] = entry if isinstance(entry, Mapping) else {}
+    chamber = str(e.get("chamber") or key.chamber)
+    state = e.get("state") if e.get("state") is not None else key.state
+    district = e.get("district") if e.get("district") is not None else key.district
+    pvi = e.get("pvi")
+    try:
+        pvi_f = float(pvi) if pvi is not None and pvi != "" else None
+    except (TypeError, ValueError):
+        pvi_f = None
+    candidates = e.get("candidates")
+    return {
+        "race_id": key.race_id,
+        "chamber": chamber,
+        "state": str(state).upper() if state else None,
+        "district": str(district) if district else None,
+        "label": str(e.get("label") or key.label),
+        "incumbent_party": (str(e["incumbent_party"]).upper() if e.get("incumbent_party") else None),
+        "pvi": pvi_f,
+        "exclusive": e.get("exclusive") if isinstance(e.get("exclusive"), bool) else None,
+        "exhaustive": e.get("exhaustive") if isinstance(e.get("exhaustive"), bool) else None,
+        "settlement_note": e.get("settlement_note") or None,
+        "candidates": candidates if isinstance(candidates, dict) and candidates else None,
+    }
+
+
+def title_contradicts(race_id: str, party: str, title: str | None) -> bool:
+    """True when an external market title clearly describes a *different* contract than (race_id, party).
+
+    Used for crosswalk candidates that were found by id/ticker pattern (Kalshi), whose titles are short
+    ("Texas Senate: Democratic") and often lack the year, so the strict ``crosswalk_match_score`` would
+    reject them. A title contradicts when it names another state (and not ours), another chamber, the
+    other major party, or a non-winner contract (primary, margin ...). An empty title never contradicts.
+    """
+    if not title:
+        return False
+    key = parse_race_id(race_id)
+    if key is None:
+        return True
+    low = _clean_title(title).lower()
+    if any(w in low for w in _EXCLUDE_WORDS):
+        return True
+    other_party = {"D": "R", "R": "D"}.get(party.upper())
+    if other_party and any(w in low for w in _PARTY_TITLE_WORDS[other_party]):
+        if not any(w in low for w in _PARTY_TITLE_WORDS[party.upper()]):
+            return True
+    if key.chamber == "control":
+        which = key.control_of or ""
+        other = "house" if which == "senate" else "senate"
+        return bool(re.search(rf"\b{other}\b", low)) and not re.search(rf"\b{which}\b", low)
+    st_name = state_name(key.state or "").lower()
+    found = _STATE_NAME_RE.search(low)
+    if found and found.group(1).lower() != st_name and st_name not in low:
+        return True
+    if key.chamber == "senate" and re.search(r"\bgovernor|\bgubernatorial|\bhouse\b", low) and "senate" not in low:
+        return True
+    if key.chamber == "governor" and re.search(r"\bsenate\b|\bhouse\b", low) and "governor" not in low:
+        return True
+    if key.chamber == "house" and re.search(r"\bsenate\b|\bgovernor\b", low) and not re.search(r"\bhouse\b|district", low):
+        return True
+    if key.chamber == "house" and key.district:
+        d = key.district
+        dnum = str(int(d)) if d.isdigit() else None
+        m = re.search(r"\b([a-z]{2})[-\s]?0?(\d{1,2})\b", low)
+        if m and dnum and m.group(1) == (key.state or "").lower() and m.group(2) != dnum:
+            return True
+    return False

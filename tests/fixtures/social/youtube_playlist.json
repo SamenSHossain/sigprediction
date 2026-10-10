@@ -1,0 +1,7 @@
+{
+  "kind": "youtube#playlistItemListResponse",
+  "items": [
+    {"kind": "youtube#playlistItem", "id": "UExhYmMuMQ", "snippet": {"publishedAt": "2026-10-09T18:00:00Z", "title": "Georgia Senate debate: Ossoff vs Carter", "resourceId": {"kind": "youtube#video", "videoId": "vid001"}}, "contentDetails": {"videoId": "vid001", "videoPublishedAt": "2026-10-09T18:00:00Z"}},
+    {"kind": "youtube#playlistItem", "id": "UExhYmMuMg", "snippet": {"publishedAt": "2025-01-01T00:00:00Z", "title": "Old upload"}, "contentDetails": {"videoId": "vidold", "videoPublishedAt": "2025-01-01T00:00:00Z"}}
+  ]
+}
