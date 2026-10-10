@@ -120,6 +120,12 @@ Changing `.env` or `config/settings.yaml` requires `pm2 restart <app>`.
    shows three fresh heartbeats, `trader` status `paper`, open orders by strategy; `sigcup report
    daily` shows paper P&L and CLV. Paper fills happen when our resting price crosses the real best
    quote. Nothing is sent to the exchange.
+   *Fully offline / before bootstrap:* `python scripts/seed_paper.py` seeds Race/Market rows from
+   `config/races.yaml` (synthetic `paper-<race>-<party>` exchange ids), the manual ratings and a
+   two-sided quote per market; `sigcup trade --paper --once` then runs a whole cycle with no key and no
+   network (`sigcup feeds --once --only nlp_features --only events`, `sigcup report loop --once` and
+   `sigcup status` work the same way). Run `python scripts/seed_paper.py --purge` before the real
+   `sigcup bootstrap` so the synthetic markets do not linger.
 2. **Canary (one order, 10 shares).**
    ```bash
    # in .env: LIVE=1, SIG_API_KEY=...   (pm2 trader still stopped or in paper)
