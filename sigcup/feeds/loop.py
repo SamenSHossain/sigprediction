@@ -285,6 +285,16 @@ class FeedsRunner:
 # ---------------------------------------------------------------------------------------------
 
 
+async def _once(runner: FeedsRunner, only: Sequence[str] | None) -> dict[str, int | None]:
+    """``--once``: run the selected collectors, then leave a heartbeat so `sigcup status` sees the pass."""
+    results = await runner.run_all_once(only)
+    try:
+        await runner.beat()
+    except Exception:  # noqa: BLE001
+        log.exception("feeds: heartbeat failed")
+    return results
+
+
 async def serve(runner: FeedsRunner) -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -307,7 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     dbengine.init_db()
     runner = FeedsRunner(cfg, sec)
     if args.once:
-        results = asyncio.run(runner.run_all_once(args.only or None))
+        results = asyncio.run(_once(runner, args.only or None))
         for name, n in results.items():
             print(f"{name:16s} {'skipped' if n is None else n}")
         return 0
