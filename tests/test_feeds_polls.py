@@ -325,6 +325,7 @@ async def test_run_once_with_mocked_web_sources(db, cfg, tmp_path):
         fec = kv_get(s, P.KV_FEC_TOTALS)
         assert fec["races"]["SEN-TX"]["D"]["name"] == "TALARICO, JAMES" and "HOUSE-AK-AL" not in fec["races"]
         assert kv_get(s, P.KV_FEC_LAST_RUN)["ts"] == NOW.isoformat()
-    assert n == 1 + 7 + 15 - 1 + 1 + 2  # manual + sabato changes + cook senate (TX already Lean R -> Toss-up counted once) + generic + fec races
+    # manual (1) + sabato changes (7) + cook senate (15, incl. TX Lean R -> Toss-up) + generic ballot (1) + FEC races (2)
+    assert n == 1 + 7 + 15 + 1 + 2
     assert not P.fec_due(dbengine.session, NOW + timedelta(hours=1))
     assert P.fec_due(dbengine.session, NOW + P.FEC_MIN_INTERVAL)

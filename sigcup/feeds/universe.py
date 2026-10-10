@@ -360,7 +360,9 @@ def parse_title(title: str) -> ParsedTitle | None:
         return None
     state = find_state(rest)
     if state is None:
-        if chamber in ("senate", "house") and cm:
+        # "win the Senate" / "win the House" (no state, no race word) is a chamber-control market;
+        # "win the House race" without a district is ambiguous and is left unmapped
+        if chamber in ("senate", "house") and cm and not has_race_word:
             key = RaceKey("control", None, None, chamber)
             return ParsedTitle(key.race_id, party, "control", None, None, key.label, special, candidate)
         return None

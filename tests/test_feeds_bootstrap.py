@@ -376,7 +376,7 @@ async def test_run_end_to_end(db, tmp_path, cfg, router, monkeypatch):
     assert (report.sig_markets, report.mapped, report.member_count) == (10, 9, 1234)
     assert report.unmapped == ["110: Will turnout exceed 50% in the 2026 midterms?"]
     assert (report.relationships, report.races_exclusive, report.races_exhaustive) == (1, 1, 1)
-    assert report.kalshi_found == 4 and report.polymarket_found == 1
+    assert report.kalshi_found == 5 and report.polymarket_found == 1  # TX D/R, GA R, PA-08 D, Senate control D
     assert (report.db_races, report.db_markets) == (119, 9)
     assert report.probes["batch_writes"]["verdict"].startswith("skipped") and fake.placed == []
     assert report.probes["relationship_graph"]["races_exclusive"] == 1
