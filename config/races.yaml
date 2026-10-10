@@ -1,0 +1,4954 @@
+# config/races.yaml -- the race universe for SIG's 2026 Midterm Elections Competition.
+#
+# HAND-EDITABLE. scripts/bootstrap_races.py merges the live SIG market list into this file and never
+# overwrites a non-empty hand-set value except the exchange-owned fields (sig_market_id, sig_exchange_id,
+# title, status, settlement_date) and the API-derived `exclusive` / `exhaustive` flags. Body comments
+# are NOT preserved by the bootstrap rewrite: keep notes in `note:` / `settlement_note:` fields.
+#
+# race_id conventions: SEN-XX, GOV-XX, HOUSE-XX-NN (zero-padded), CONTROL-SENATE, CONTROL-HOUSE.
+# Fields per race:
+#   chamber            senate | governor | house | control
+#   state / district   two-letter code / 'NN' or 'AL'
+#   label              human label
+#   special            true for the FL / OH Senate specials
+#   incumbent_party    D | R | I | null (party holding the seat before the election)
+#   pvi                Cook PVI in points, POSITIVE = Republican lean, null = unknown. Seed values are the
+#                      2025 Cook PVI as remembered at seed time (+-2 pts): verify before relying on them.
+#   exclusive / exhaustive   ONLY from the exchange relationships API (bootstrap). null = no evidence.
+#   settlement_note    runoff / fusion / independent / ranked-choice caveats (read before trading)
+#   candidates         {party: {name, aliases[], handles[], hashtags[]}} for the gazetteer
+#   markets            {party: {sig_market_id, sig_exchange_id, title, status, settlement_date,
+#                      kalshi_ticker, polymarket_condition_id, polymarket_token_id, polymarket_slug,
+#                      polymarket_gamma_id, predictit_id}}; empty strings are filled by bootstrap.
+version: 1
+seeded_at: '2026-10-10'
+seed_note: 'Seed universe from docs/research/platform.md (35 Senate incl. FL/OH specials, 36 governors, 46 House
+  districts, 4 control legs). Exchange ids are empty until scripts/bootstrap_races.py runs. Ohio Senate and Governor
+  were missing from the Sept-30 SIG list: bootstrap reports whether they exist live.'
+races:
+  CONTROL-HOUSE:
+    chamber: control
+    state: null
+    district: null
+    label: House control
+    special: false
+    incumbent_party: null
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Freeform market settled manually once news organizations call control; may be uncalled on Nov
+      4 (dead capital for interim marks; final rank uses the settled balance).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  CONTROL-SENATE:
+    chamber: control
+    state: null
+    district: null
+    label: Senate control
+    special: false
+    incumbent_party: null
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Freeform market settled manually once news organizations call control; may be uncalled on Nov
+      4 (dead capital for interim marks; final rank uses the settled balance).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-AK:
+    chamber: senate
+    state: AK
+    district: null
+    label: Alaska Senate
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Alaska general elections use ranked-choice tabulation: the call can lag by days.'
+    candidates:
+      D:
+        name: Mary Peltola
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Dan Sullivan
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-AL:
+    chamber: senate
+    state: AL
+    district: null
+    label: Alabama Senate
+    special: false
+    incumbent_party: R
+    pvi: 15
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Tuberville running for governor).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-AR:
+    chamber: senate
+    state: AR
+    district: null
+    label: Arkansas Senate
+    special: false
+    incumbent_party: R
+    pvi: 16
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Tom Cotton
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-CO:
+    chamber: senate
+    state: CO
+    district: null
+    label: Colorado Senate
+    special: false
+    incumbent_party: D
+    pvi: -4
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: John Hickenlooper
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-DE:
+    chamber: senate
+    state: DE
+    district: null
+    label: Delaware Senate
+    special: false
+    incumbent_party: D
+    pvi: -7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Chris Coons
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-FL:
+    chamber: senate
+    state: FL
+    district: null
+    label: Florida Senate
+    special: true
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Special election for the remainder of the Rubio term (seat held by appointee Ashley Moody).
+    candidates:
+      R:
+        name: Ashley Moody
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-GA:
+    chamber: senate
+    state: GA
+    district: null
+    label: Georgia Senate
+    special: false
+    incumbent_party: D
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Georgia runoff (Dec 1 2026) if nobody exceeds 50%: SIG settles only on official results, possibly
+      in December; legs may stay unresolved past Nov 4.'
+    candidates:
+      D:
+        name: Jon Ossoff
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-IA:
+    chamber: senate
+    state: IA
+    district: null
+    label: Iowa Senate
+    special: false
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Ernst retiring).
+    candidates:
+      R:
+        name: Ashley Hinson
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-ID:
+    chamber: senate
+    state: ID
+    district: null
+    label: Idaho Senate
+    special: false
+    incumbent_party: R
+    pvi: 18
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Jim Risch
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-IL:
+    chamber: senate
+    state: IL
+    district: null
+    label: Illinois Senate
+    special: false
+    incumbent_party: D
+    pvi: -7
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Durbin retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-KS:
+    chamber: senate
+    state: KS
+    district: null
+    label: Kansas Senate
+    special: false
+    incumbent_party: R
+    pvi: 10
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Roger Marshall
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-KY:
+    chamber: senate
+    state: KY
+    district: null
+    label: Kentucky Senate
+    special: false
+    incumbent_party: R
+    pvi: 16
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (McConnell retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-LA:
+    chamber: senate
+    state: LA
+    district: null
+    label: Louisiana Senate
+    special: false
+    incumbent_party: R
+    pvi: 12
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Louisiana moved federal races to closed party primaries from 2026 (verify): a December general
+      runoff may no longer apply. Confirm the settlement rule before any NO+NO structure.'
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-MA:
+    chamber: senate
+    state: MA
+    district: null
+    label: Massachusetts Senate
+    special: false
+    incumbent_party: D
+    pvi: -15
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Ed Markey
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-ME:
+    chamber: senate
+    state: ME
+    district: null
+    label: Maine Senate
+    special: false
+    incumbent_party: R
+    pvi: -2
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Maine uses ranked-choice voting in federal general elections: the call can lag.'
+    candidates:
+      D:
+        name: Troy Jackson
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Susan Collins
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-MI:
+    chamber: senate
+    state: MI
+    district: null
+    label: Michigan Senate
+    special: false
+    incumbent_party: D
+    pvi: 1
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Peters retiring).
+    candidates:
+      D:
+        name: Abdul El-Sayed
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Mike Rogers
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-MN:
+    chamber: senate
+    state: MN
+    district: null
+    label: Minnesota Senate
+    special: false
+    incumbent_party: D
+    pvi: -1
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Smith retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-MS:
+    chamber: senate
+    state: MS
+    district: null
+    label: Mississippi Senate
+    special: false
+    incumbent_party: R
+    pvi: 11
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Cindy Hyde-Smith
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-MT:
+    chamber: senate
+    state: MT
+    district: null
+    label: Montana Senate
+    special: false
+    incumbent_party: R
+    pvi: 11
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'SIG lists an Independent leg: D and R legs are not exhaustive (both can resolve NO).'
+    candidates:
+      R:
+        name: Steve Daines
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      I:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-NC:
+    chamber: senate
+    state: NC
+    district: null
+    label: North Carolina Senate
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Tillis retiring).
+    candidates:
+      D:
+        name: Roy Cooper
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Michael Whatley
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-NE:
+    chamber: senate
+    state: NE
+    district: null
+    label: Nebraska Senate
+    special: false
+    incumbent_party: R
+    pvi: 13
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Independent Dan Osborn carries his own SIG leg: D and R legs are NOT exhaustive.'
+    candidates:
+      R:
+        name: Pete Ricketts
+        aliases: []
+        handles: []
+        hashtags: []
+      I:
+        name: Dan Osborn
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      I:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-NH:
+    chamber: senate
+    state: NH
+    district: null
+    label: New Hampshire Senate
+    special: false
+    incumbent_party: D
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Shaheen retiring).
+    candidates:
+      D:
+        name: Chris Pappas
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-NJ:
+    chamber: senate
+    state: NJ
+    district: null
+    label: New Jersey Senate
+    special: false
+    incumbent_party: D
+    pvi: -6
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Cory Booker
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-NM:
+    chamber: senate
+    state: NM
+    district: null
+    label: New Mexico Senate
+    special: false
+    incumbent_party: D
+    pvi: -3
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Ben Ray Lujan
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-OH:
+    chamber: senate
+    state: OH
+    district: null
+    label: Ohio Senate
+    special: true
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: Special election for the remainder of the Vance term (seat held by appointee Jon Husted).
+    candidates:
+      D:
+        name: Sherrod Brown
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Jon Husted
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-OK:
+    chamber: senate
+    state: OK
+    district: null
+    label: Oklahoma Senate
+    special: false
+    incumbent_party: R
+    pvi: 20
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Markwayne Mullin
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-OR:
+    chamber: senate
+    state: OR
+    district: null
+    label: Oregon Senate
+    special: false
+    incumbent_party: D
+    pvi: -6
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Jeff Merkley
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-RI:
+    chamber: senate
+    state: RI
+    district: null
+    label: Rhode Island Senate
+    special: false
+    incumbent_party: D
+    pvi: -8
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Rhode Island fusion voting: a candidate on a fusion ticket counts for EVERY party on that
+      ticket, so D and R legs can both resolve YES (NO+NO pays 0). Never Dutch-book without API exclusivity.'
+    candidates:
+      D:
+        name: Jack Reed
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-SC:
+    chamber: senate
+    state: SC
+    district: null
+    label: South Carolina Senate
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Lindsey Graham
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-SD:
+    chamber: senate
+    state: SD
+    district: null
+    label: South Dakota Senate
+    special: false
+    incumbent_party: R
+    pvi: 16
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Mike Rounds
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-TN:
+    chamber: senate
+    state: TN
+    district: null
+    label: Tennessee Senate
+    special: false
+    incumbent_party: R
+    pvi: 14
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Bill Hagerty
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-TX:
+    chamber: senate
+    state: TX
+    district: null
+    label: Texas Senate
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Cornyn not the nominee).
+    candidates:
+      D:
+        name: James Talarico
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Ken Paxton
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-VA:
+    chamber: senate
+    state: VA
+    district: null
+    label: Virginia Senate
+    special: false
+    incumbent_party: D
+    pvi: -3
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Mark Warner
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-WV:
+    chamber: senate
+    state: WV
+    district: null
+    label: West Virginia Senate
+    special: false
+    incumbent_party: R
+    pvi: 22
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Shelley Moore Capito
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  SEN-WY:
+    chamber: senate
+    state: WY
+    district: null
+    label: Wyoming Senate
+    special: false
+    incumbent_party: R
+    pvi: 25
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Cynthia Lummis
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-AK:
+    chamber: governor
+    state: AK
+    district: null
+    label: Alaska Governor
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Dunleavy term-limited). Ranked-choice tabulation can delay the call.
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-AL:
+    chamber: governor
+    state: AL
+    district: null
+    label: Alabama Governor
+    special: false
+    incumbent_party: R
+    pvi: 15
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Ivey term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-AR:
+    chamber: governor
+    state: AR
+    district: null
+    label: Arkansas Governor
+    special: false
+    incumbent_party: R
+    pvi: 16
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Sarah Huckabee Sanders
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-AZ:
+    chamber: governor
+    state: AZ
+    district: null
+    label: Arizona Governor
+    special: false
+    incumbent_party: D
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Katie Hobbs
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-CA:
+    chamber: governor
+    state: CA
+    district: null
+    label: California Governor
+    special: false
+    incumbent_party: D
+    pvi: -13
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Newsom term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-CO:
+    chamber: governor
+    state: CO
+    district: null
+    label: Colorado Governor
+    special: false
+    incumbent_party: D
+    pvi: -4
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Polis term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-CT:
+    chamber: governor
+    state: CT
+    district: null
+    label: Connecticut Governor
+    special: false
+    incumbent_party: D
+    pvi: -7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Ned Lamont
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-FL:
+    chamber: governor
+    state: FL
+    district: null
+    label: Florida Governor
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (DeSantis term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-GA:
+    chamber: governor
+    state: GA
+    district: null
+    label: Georgia Governor
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'Open seat (Kemp term-limited). Georgia runoff (Dec 1 2026) if nobody exceeds 50%: settlement
+      may slip to December.'
+    candidates:
+      D:
+        name: Keisha Lance Bottoms
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-HI:
+    chamber: governor
+    state: HI
+    district: null
+    label: Hawaii Governor
+    special: false
+    incumbent_party: D
+    pvi: -14
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Josh Green
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-IA:
+    chamber: governor
+    state: IA
+    district: null
+    label: Iowa Governor
+    special: false
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Reynolds retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-ID:
+    chamber: governor
+    state: ID
+    district: null
+    label: Idaho Governor
+    special: false
+    incumbent_party: R
+    pvi: 18
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Brad Little
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-IL:
+    chamber: governor
+    state: IL
+    district: null
+    label: Illinois Governor
+    special: false
+    incumbent_party: D
+    pvi: -7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: JB Pritzker
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-KS:
+    chamber: governor
+    state: KS
+    district: null
+    label: Kansas Governor
+    special: false
+    incumbent_party: D
+    pvi: 10
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Kelly term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-MA:
+    chamber: governor
+    state: MA
+    district: null
+    label: Massachusetts Governor
+    special: false
+    incumbent_party: D
+    pvi: -15
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Maura Healey
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-MD:
+    chamber: governor
+    state: MD
+    district: null
+    label: Maryland Governor
+    special: false
+    incumbent_party: D
+    pvi: -14
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Wes Moore
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-ME:
+    chamber: governor
+    state: ME
+    district: null
+    label: Maine Governor
+    special: false
+    incumbent_party: D
+    pvi: -2
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Mills term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-MI:
+    chamber: governor
+    state: MI
+    district: null
+    label: Michigan Governor
+    special: false
+    incumbent_party: D
+    pvi: 1
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Whitmer term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-MN:
+    chamber: governor
+    state: MN
+    district: null
+    label: Minnesota Governor
+    special: false
+    incumbent_party: D
+    pvi: -1
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Tim Walz
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-NE:
+    chamber: governor
+    state: NE
+    district: null
+    label: Nebraska Governor
+    special: false
+    incumbent_party: R
+    pvi: 13
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Jim Pillen
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-NH:
+    chamber: governor
+    state: NH
+    district: null
+    label: New Hampshire Governor
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Kelly Ayotte
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-NM:
+    chamber: governor
+    state: NM
+    district: null
+    label: New Mexico Governor
+    special: false
+    incumbent_party: D
+    pvi: -3
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Lujan Grisham term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-NV:
+    chamber: governor
+    state: NV
+    district: null
+    label: Nevada Governor
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Aaron Ford
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Joe Lombardo
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-NY:
+    chamber: governor
+    state: NY
+    district: null
+    label: New York Governor
+    special: false
+    incumbent_party: D
+    pvi: -10
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Kathy Hochul
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-OH:
+    chamber: governor
+    state: OH
+    district: null
+    label: Ohio Governor
+    special: false
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (DeWine term-limited).
+    candidates:
+      D:
+        name: Amy Acton
+        aliases: []
+        handles: []
+        hashtags: []
+      R:
+        name: Vivek Ramaswamy
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-OK:
+    chamber: governor
+    state: OK
+    district: null
+    label: Oklahoma Governor
+    special: false
+    incumbent_party: R
+    pvi: 20
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Stitt term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-OR:
+    chamber: governor
+    state: OR
+    district: null
+    label: Oregon Governor
+    special: false
+    incumbent_party: D
+    pvi: -6
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Tina Kotek
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-PA:
+    chamber: governor
+    state: PA
+    district: null
+    label: Pennsylvania Governor
+    special: false
+    incumbent_party: D
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Josh Shapiro
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-RI:
+    chamber: governor
+    state: RI
+    district: null
+    label: Rhode Island Governor
+    special: false
+    incumbent_party: D
+    pvi: -8
+    exclusive: null
+    exhaustive: null
+    settlement_note: 'SIG lists an Independent leg: D and R legs are not exhaustive. Rhode Island fusion voting
+      also means a fusion candidate counts for every party on the ticket.'
+    candidates:
+      D:
+        name: Dan McKee
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      I:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-SC:
+    chamber: governor
+    state: SC
+    district: null
+    label: South Carolina Governor
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (McMaster term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-SD:
+    chamber: governor
+    state: SD
+    district: null
+    label: South Dakota Governor
+    special: false
+    incumbent_party: R
+    pvi: 16
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-TN:
+    chamber: governor
+    state: TN
+    district: null
+    label: Tennessee Governor
+    special: false
+    incumbent_party: R
+    pvi: 14
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Lee term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-TX:
+    chamber: governor
+    state: TX
+    district: null
+    label: Texas Governor
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Greg Abbott
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-VT:
+    chamber: governor
+    state: VT
+    district: null
+    label: Vermont Governor
+    special: false
+    incumbent_party: R
+    pvi: -16
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-WI:
+    chamber: governor
+    state: WI
+    district: null
+    label: Wisconsin Governor
+    special: false
+    incumbent_party: D
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Evers retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  GOV-WY:
+    chamber: governor
+    state: WY
+    district: null
+    label: Wyoming Governor
+    special: false
+    incumbent_party: R
+    pvi: 25
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Gordon term-limited).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-AL-02:
+    chamber: house
+    state: AL
+    district: '02'
+    label: AL-02 House
+    special: false
+    incumbent_party: D
+    pvi: -4
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Shomari Figures
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-AZ-01:
+    chamber: house
+    state: AZ
+    district: '01'
+    label: AZ-01 House
+    special: false
+    incumbent_party: R
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Schweikert running for governor).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-AZ-06:
+    chamber: house
+    state: AZ
+    district: '06'
+    label: AZ-06 House
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Juan Ciscomani
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-CA-22:
+    chamber: house
+    state: CA
+    district: '22'
+    label: CA-22 House
+    special: false
+    incumbent_party: R
+    pvi: -5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: David Valadao
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-CA-48:
+    chamber: house
+    state: CA
+    district: '48'
+    label: CA-48 House
+    special: false
+    incumbent_party: R
+    pvi: 4
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Darrell Issa
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-CO-03:
+    chamber: house
+    state: CO
+    district: '03'
+    label: CO-03 House
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Jeff Hurd
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-CO-04:
+    chamber: house
+    state: CO
+    district: '04'
+    label: CO-04 House
+    special: false
+    incumbent_party: R
+    pvi: 11
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Lauren Boebert
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-CO-08:
+    chamber: house
+    state: CO
+    district: 08
+    label: CO-08 House
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Gabe Evans
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-07:
+    chamber: house
+    state: FL
+    district: '07'
+    label: FL-07 House
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Cory Mills
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-09:
+    chamber: house
+    state: FL
+    district: 09
+    label: FL-09 House
+    special: false
+    incumbent_party: D
+    pvi: -5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Darren Soto
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-13:
+    chamber: house
+    state: FL
+    district: '13'
+    label: FL-13 House
+    special: false
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Anna Paulina Luna
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-16:
+    chamber: house
+    state: FL
+    district: '16'
+    label: FL-16 House
+    special: false
+    incumbent_party: R
+    pvi: 7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Vern Buchanan
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-20:
+    chamber: house
+    state: FL
+    district: '20'
+    label: FL-20 House
+    special: false
+    incumbent_party: D
+    pvi: -25
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Sheila Cherfilus-McCormick
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-FL-22:
+    chamber: house
+    state: FL
+    district: '22'
+    label: FL-22 House
+    special: false
+    incumbent_party: D
+    pvi: -7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Jared Moskowitz
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-IA-01:
+    chamber: house
+    state: IA
+    district: '01'
+    label: IA-01 House
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Mariannette Miller-Meeks
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-IA-02:
+    chamber: house
+    state: IA
+    district: '02'
+    label: IA-02 House
+    special: false
+    incumbent_party: R
+    pvi: 4
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Hinson running for Senate).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-IA-03:
+    chamber: house
+    state: IA
+    district: '03'
+    label: IA-03 House
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Zach Nunn
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-KY-04:
+    chamber: house
+    state: KY
+    district: '04'
+    label: KY-04 House
+    special: false
+    incumbent_party: R
+    pvi: 20
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Thomas Massie
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-ME-02:
+    chamber: house
+    state: ME
+    district: '02'
+    label: ME-02 House
+    special: false
+    incumbent_party: D
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Golden retiring). Maine RCV applies to federal general elections.
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MI-07:
+    chamber: house
+    state: MI
+    district: '07'
+    label: MI-07 House
+    special: false
+    incumbent_party: R
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Tom Barrett
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MI-10:
+    chamber: house
+    state: MI
+    district: '10'
+    label: MI-10 House
+    special: false
+    incumbent_party: R
+    pvi: 3
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (James running for governor).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MN-01:
+    chamber: house
+    state: MN
+    district: '01'
+    label: MN-01 House
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Brad Finstad
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MN-02:
+    chamber: house
+    state: MN
+    district: '02'
+    label: MN-02 House
+    special: false
+    incumbent_party: D
+    pvi: -1
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Craig running for Senate).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MN-05:
+    chamber: house
+    state: MN
+    district: '05'
+    label: MN-05 House
+    special: false
+    incumbent_party: D
+    pvi: -30
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Ilhan Omar
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-MT-01:
+    chamber: house
+    state: MT
+    district: '01'
+    label: MT-01 House
+    special: false
+    incumbent_party: R
+    pvi: 7
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Ryan Zinke
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-NE-02:
+    chamber: house
+    state: NE
+    district: '02'
+    label: NE-02 House
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Bacon retiring).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-NH-01:
+    chamber: house
+    state: NH
+    district: '01'
+    label: NH-01 House
+    special: false
+    incumbent_party: D
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Pappas running for Senate).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-NJ-07:
+    chamber: house
+    state: NJ
+    district: '07'
+    label: NJ-07 House
+    special: false
+    incumbent_party: R
+    pvi: 1
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Tom Kean
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-NY-13:
+    chamber: house
+    state: NY
+    district: '13'
+    label: NY-13 House
+    special: false
+    incumbent_party: D
+    pvi: -36
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Adriano Espaillat
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-NY-17:
+    chamber: house
+    state: NY
+    district: '17'
+    label: NY-17 House
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Mike Lawler
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-PA-01:
+    chamber: house
+    state: PA
+    district: '01'
+    label: PA-01 House
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Brian Fitzpatrick
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-PA-07:
+    chamber: house
+    state: PA
+    district: '07'
+    label: PA-07 House
+    special: false
+    incumbent_party: R
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Ryan Mackenzie
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-PA-08:
+    chamber: house
+    state: PA
+    district: 08
+    label: PA-08 House
+    special: false
+    incumbent_party: R
+    pvi: 4
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Rob Bresnahan
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-PA-10:
+    chamber: house
+    state: PA
+    district: '10'
+    label: PA-10 House
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Scott Perry
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-SC-01:
+    chamber: house
+    state: SC
+    district: '01'
+    label: SC-01 House
+    special: false
+    incumbent_party: R
+    pvi: 7
+    exclusive: null
+    exhaustive: null
+    settlement_note: Open seat (Mace running for governor).
+    candidates: {}
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-TN-05:
+    chamber: house
+    state: TN
+    district: '05'
+    label: TN-05 House
+    special: false
+    incumbent_party: R
+    pvi: 11
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Andy Ogles
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-TX-15:
+    chamber: house
+    state: TX
+    district: '15'
+    label: TX-15 House
+    special: false
+    incumbent_party: R
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Monica De La Cruz
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-TX-23:
+    chamber: house
+    state: TX
+    district: '23'
+    label: TX-23 House
+    special: false
+    incumbent_party: R
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Tony Gonzales
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-TX-28:
+    chamber: house
+    state: TX
+    district: '28'
+    label: TX-28 House
+    special: false
+    incumbent_party: D
+    pvi: null
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Henry Cuellar
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-VA-01:
+    chamber: house
+    state: VA
+    district: '01'
+    label: VA-01 House
+    special: false
+    incumbent_party: R
+    pvi: 6
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Rob Wittman
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-VA-02:
+    chamber: house
+    state: VA
+    district: '02'
+    label: VA-02 House
+    special: false
+    incumbent_party: R
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Jen Kiggans
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-VA-05:
+    chamber: house
+    state: VA
+    district: '05'
+    label: VA-05 House
+    special: false
+    incumbent_party: R
+    pvi: 8
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: John McGuire
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-VA-07:
+    chamber: house
+    state: VA
+    district: '07'
+    label: VA-07 House
+    special: false
+    incumbent_party: D
+    pvi: -2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Eugene Vindman
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-WA-03:
+    chamber: house
+    state: WA
+    district: '03'
+    label: WA-03 House
+    special: false
+    incumbent_party: D
+    pvi: 5
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      D:
+        name: Marie Gluesenkamp Perez
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-WI-01:
+    chamber: house
+    state: WI
+    district: '01'
+    label: WI-01 House
+    special: false
+    incumbent_party: R
+    pvi: 2
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Bryan Steil
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+  HOUSE-WI-03:
+    chamber: house
+    state: WI
+    district: '03'
+    label: WI-03 House
+    special: false
+    incumbent_party: R
+    pvi: 4
+    exclusive: null
+    exhaustive: null
+    settlement_note: null
+    candidates:
+      R:
+        name: Derrick Van Orden
+        aliases: []
+        handles: []
+        hashtags: []
+    markets:
+      D:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''
+      R:
+        sig_market_id: ''
+        sig_exchange_id: ''
+        title: ''
+        status: ''
+        settlement_date: ''
+        kalshi_ticker: ''
+        polymarket_condition_id: ''
+        polymarket_token_id: ''
+        polymarket_slug: ''
+        polymarket_gamma_id: ''
+        predictit_id: ''

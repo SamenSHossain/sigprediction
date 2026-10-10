@@ -1,0 +1,167 @@
+# config/ratings_manual.yaml -- hand-maintained race ratings, the day-one fallback fair value.
+#
+# Loaded by sigcup.feeds.polls.load_manual_ratings() on every polls run (idempotent: a row is written only
+# when the latest stored rating for (race_id, source) differs). Each entry:
+#   race_id    SEN-XX | GOV-XX | HOUSE-XX-NN | CONTROL-SENATE | CONTROL-HOUSE   (see config/races.yaml)
+#   rating     Safe/Solid/Likely/Lean/Tilt + D/R, or Toss-up (any spelling the normaliser accepts)
+#   source     who said it: cook | sabato | inside | split | rttwh | manual (default manual)
+#   as_of      YYYY-MM-DD (defaults to the top-level as_of); stored as the Rating.ts (00:00 UTC)
+#   prob_dem   optional explicit P(Democrat) overriding the rating -> probability table in settings.yaml
+#              (fairvalue.ratings_prob: safe .97, likely .85, lean .68, tilt .58, tossup .50)
+#   note       free text
+#
+# Provenance: docs/research/platform.md section 6 (Cook Oct 6 Senate, Cook Oct 1 governors, Cook Oct 9 House,
+# Sabato Oct 6, Inside Elections Oct 1). Entries marked "seed guess" are NOT published ratings: they are
+# incumbency/PVI placeholders for races the research does not document, to be replaced by the collectors
+# (Sabato/Cook/RTTWH/270toWin pages) or by hand.
+as_of: "2026-10-09"
+ratings:
+  # ---- Cook Political Report, Senate (2026-10-06) ------------------------------------------------
+  - {race_id: SEN-AK, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-IA, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-KS, rating: "Toss Up", source: cook, as_of: "2026-10-06", note: "moved from Lean R"}
+  - {race_id: SEN-ME, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-MI, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-OH, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-TX, rating: "Toss Up", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-NH, rating: "Lean D", source: cook, as_of: "2026-10-06", note: "moved from Toss Up"}
+  - {race_id: SEN-GA, rating: "Likely D", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-MN, rating: "Likely D", source: cook, as_of: "2026-10-06"}
+  - {race_id: SEN-NC, rating: "Likely D", source: cook, as_of: "2026-10-06", note: "moved from Lean D"}
+
+  # ---- Sabato's Crystal Ball, Senate / Governor (2026-10-06) ---------------------------------------
+  - {race_id: SEN-AK, rating: "Leans D", source: sabato, as_of: "2026-10-06", note: "moved from Toss-up"}
+  - {race_id: SEN-SC, rating: "Likely R", source: sabato, as_of: "2026-10-06", note: "moved from Safe R"}
+  - {race_id: GOV-AK, rating: "Leans D", source: sabato, as_of: "2026-10-06"}
+  - {race_id: GOV-OR, rating: "Leans D", source: sabato, as_of: "2026-10-06"}
+
+  # ---- Inside Elections, Senate / Governor (2026-10-01) --------------------------------------------
+  - {race_id: SEN-AK, rating: "Toss-up", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-GA, rating: "Lean D", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-NC, rating: "Lean D", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-MI, rating: "Tilt D", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-MN, rating: "Lean D", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-NE, rating: "Lean R", source: inside, as_of: "2026-10-01"}
+  - {race_id: SEN-TX, rating: "Tilt R", source: inside, as_of: "2026-10-01"}
+  - {race_id: GOV-AK, rating: "Toss-up", source: inside, as_of: "2026-10-01"}
+  - {race_id: GOV-OH, rating: "Toss-up", source: inside, as_of: "2026-10-01"}
+
+  # ---- Cook Political Report, Governors (2026-10-01) ----------------------------------------------
+  - {race_id: GOV-AK, rating: "Toss Up", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-GA, rating: "Toss Up", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-NV, rating: "Toss Up", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-OH, rating: "Toss Up", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-WI, rating: "Toss Up", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-AZ, rating: "Lean D", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-MI, rating: "Lean D", source: cook, as_of: "2026-10-01"}
+  - {race_id: GOV-KS, rating: "Lean R", source: cook, as_of: "2026-10-01"}
+
+  # ---- Cook Political Report, House (2026-10-09; toss-up list as of Oct 8 from platform.md s6) -----
+  - {race_id: HOUSE-IA-01, rating: "Lean D", source: cook, as_of: "2026-10-09", note: "moved from Toss Up"}
+  - {race_id: HOUSE-IA-03, rating: "Lean D", source: cook, as_of: "2026-10-09"}
+  - {race_id: HOUSE-PA-07, rating: "Lean D", source: cook, as_of: "2026-10-09"}
+  - {race_id: HOUSE-PA-10, rating: "Lean D", source: cook, as_of: "2026-10-09"}
+  - {race_id: HOUSE-WA-03, rating: "Lean D", source: cook, as_of: "2026-10-09", note: "moved from Toss Up"}
+  - {race_id: HOUSE-PA-08, rating: "Toss Up", source: cook, as_of: "2026-10-09"}
+  - {race_id: HOUSE-AZ-01, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-AZ-06, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-VA-02, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-CO-08, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-NE-02, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-NJ-07, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-NY-17, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-MI-07, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-MI-10, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-ME-02, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-WI-03, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-MN-02, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-TX-28, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+  - {race_id: HOUSE-CA-22, rating: "Toss Up", source: cook, as_of: "2026-10-08"}
+
+  # ---- Chamber control: market-implied, not a rating (explicit prob_dem) ---------------------------
+  - {race_id: CONTROL-SENATE, rating: "Lean D", prob_dem: 0.63, source: manual, as_of: "2026-10-09",
+     note: "Kalshi Oct 6-8 D 63-64%, Polymarket Oct 9 D ~63%"}
+  - {race_id: CONTROL-HOUSE, rating: "Likely D", prob_dem: 0.91, source: manual, as_of: "2026-10-09",
+     note: "Polymarket Oct 9 D ~91%; Cook range D 224-234"}
+
+  # ---- Seed guesses (NOT published ratings): incumbency / PVI placeholders for undocumented races ----
+  # Senate "dead" races per platform.md s6 (external 97-99)
+  - {race_id: SEN-WY, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-ID, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-AR, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-AL, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-OK, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-SD, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-TN, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-WV, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-MS, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-KY, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-LA, rating: "Safe R", note: "seed guess"}
+  - {race_id: SEN-FL, rating: "Likely R", note: "seed guess (special; appointed incumbent)"}
+  - {race_id: SEN-MT, rating: "Likely R", note: "seed guess"}
+  - {race_id: SEN-NE, rating: "Likely R", note: "seed guess (Osborn independent leg; see inside)"}
+  - {race_id: SEN-CO, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-DE, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-IL, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-MA, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-NJ, rating: "Likely D", note: "seed guess"}
+  - {race_id: SEN-NM, rating: "Likely D", note: "seed guess"}
+  - {race_id: SEN-OR, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-RI, rating: "Safe D", note: "seed guess (fusion caveat in races.yaml)"}
+  - {race_id: SEN-VA, rating: "Safe D", note: "seed guess"}
+  - {race_id: SEN-SC, rating: "Likely R", source: manual, note: "seed guess, consistent with Sabato Oct 6"}
+  # Governors
+  - {race_id: GOV-AL, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-AR, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-CA, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-CO, rating: "Likely D", note: "seed guess"}
+  - {race_id: GOV-CT, rating: "Likely D", note: "seed guess"}
+  - {race_id: GOV-FL, rating: "Likely R", note: "seed guess"}
+  - {race_id: GOV-HI, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-ID, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-IL, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-IA, rating: "Likely R", note: "seed guess"}
+  - {race_id: GOV-ME, rating: "Lean D", note: "seed guess"}
+  - {race_id: GOV-MD, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-MA, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-MN, rating: "Likely D", note: "seed guess"}
+  - {race_id: GOV-NE, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-NH, rating: "Likely R", note: "seed guess"}
+  - {race_id: GOV-NM, rating: "Likely D", note: "seed guess"}
+  - {race_id: GOV-NY, rating: "Safe D", note: "seed guess"}
+  - {race_id: GOV-OK, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-PA, rating: "Likely D", note: "seed guess"}
+  - {race_id: GOV-RI, rating: "Likely D", note: "seed guess (independent leg; see races.yaml)"}
+  - {race_id: GOV-SC, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-SD, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-TN, rating: "Safe R", note: "seed guess"}
+  - {race_id: GOV-TX, rating: "Likely R", note: "seed guess"}
+  - {race_id: GOV-VT, rating: "Safe R", note: "seed guess (Scott if running; verify)"}
+  - {race_id: GOV-WY, rating: "Safe R", note: "seed guess"}
+  # House
+  - {race_id: HOUSE-AL-02, rating: "Likely D", note: "seed guess"}
+  - {race_id: HOUSE-CA-48, rating: "Lean R", note: "seed guess"}
+  - {race_id: HOUSE-CO-03, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-CO-04, rating: "Safe R", note: "seed guess"}
+  - {race_id: HOUSE-FL-07, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-FL-09, rating: "Likely D", note: "seed guess"}
+  - {race_id: HOUSE-FL-13, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-FL-16, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-FL-20, rating: "Safe D", note: "seed guess"}
+  - {race_id: HOUSE-FL-22, rating: "Likely D", note: "seed guess"}
+  - {race_id: HOUSE-IA-02, rating: "Lean R", note: "seed guess"}
+  - {race_id: HOUSE-KY-04, rating: "Safe R", note: "seed guess"}
+  - {race_id: HOUSE-MN-01, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-MN-05, rating: "Safe D", note: "seed guess"}
+  - {race_id: HOUSE-MT-01, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-NH-01, rating: "Likely D", note: "seed guess"}
+  - {race_id: HOUSE-NY-13, rating: "Safe D", note: "seed guess"}
+  - {race_id: HOUSE-PA-01, rating: "Lean R", note: "seed guess"}
+  - {race_id: HOUSE-SC-01, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-TN-05, rating: "Safe R", note: "seed guess"}
+  - {race_id: HOUSE-TX-15, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-TX-23, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-VA-01, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-VA-05, rating: "Likely R", note: "seed guess"}
+  - {race_id: HOUSE-VA-07, rating: "Likely D", note: "seed guess"}
+  - {race_id: HOUSE-WI-01, rating: "Likely R", note: "seed guess"}
