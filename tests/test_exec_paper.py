@@ -35,7 +35,7 @@ async def test_buy_crossing_ask_fills_at_resting_price_bounded_by_size(paper):
     (pos,) = await p.get_positions()
     assert pos.quantity == 20 and pos.avg_price == pytest.approx(0.60)
     fills = await p.get_fills()
-    assert [f.fill_id for f in fills] == ["paper:1"] and fills[0].quantity == 20
+    assert [f.fill_id for f in fills] == [f"paper:{p.run_id}:1"] and fills[0].quantity == 20
     # more liquidity arrives: the remainder fills
     p.set_top("m1", bid=0.50, ask=0.55, ask_size=100)
     open_orders = await p.get_open_orders()

@@ -7,6 +7,7 @@ Decision table (``sleeve_fraction``)::
     endgame disabled, or more than final_hours to the deadline  -> convex_sleeve.budget_frac
     no usable / stale leaderboard                               -> convex_sleeve.budget_frac
     rank <= rank_target ("placed")                              -> sleeve_frac_if_placed
+    rank unknown and our total >= the rank_target total         -> sleeve_frac_if_placed
     (target total - ours) / ours <= reachable_gap_frac          -> sleeve_frac_if_reachable
     otherwise (out of reach)                                    -> convex_sleeve.budget_frac
 
@@ -93,6 +94,10 @@ def sleeve_fraction(cfg: StrategyConfig, now: datetime, leaderboard: Any | None,
     if target is None or ours_f <= 0:
         return default
     gap = (target - ours_f) / ours_f
+    if gap <= 0:
+        # rank unknown (lenient leaderboard parse) but our total already matches the target's: placed
+        log.info("endgame: total %.0f >= rank-%d total %.0f -> placed, sleeve %.2f", ours_f, rank_target, target, cfg.endgame.sleeve_frac_if_placed)
+        return float(min(1.0, max(0.0, cfg.endgame.sleeve_frac_if_placed)))
     if gap <= cfg.endgame.reachable_gap_frac:
         log.info("endgame: gap %.3f to rank %d within reach -> sleeve %.2f", gap, rank_target, cfg.endgame.sleeve_frac_if_reachable)
         return float(min(1.0, max(0.0, cfg.endgame.sleeve_frac_if_reachable)))

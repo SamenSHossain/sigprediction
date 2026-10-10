@@ -15,11 +15,16 @@ book mid, else the order price. Per-race exposure is the worst-case loss over th
 buy-NO-on-R add up (same bet) while buy-YES-on-D and buy-YES-on-R offset (a hedge).
 
 ``apply(ctx, desired)`` is the entry point used by the trader loop; everything else is a pure helper.
+
+Target semantics: signals re-emit the whole target book every cycle and the OMS diffs it against the working
+orders by (market, side, action, strategy). A desired order with the same key as a resting (ACKED) intent
+keeps or replaces it, so ``apply`` evaluates the desired order *instead of* that intent: its remaining
+quantity and its cash reservation are taken out before the caps and the reserve are checked.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -195,11 +200,53 @@ def position_legs(ctx: TraderContext) -> dict[str, Leg]:
     return legs
 
 
-def resting_yes_qty(ctx: TraderContext) -> dict[str, float]:
-    """Signed YES quantity of resting (ACKED) intents per market, as if they filled."""
+def _key(exchange_id: str, side: object, action: object, strategy: object) -> tuple[str, str, str, str]:
+    return (str(exchange_id), str(side), str(action), str(getattr(strategy, "value", strategy)))
+
+
+def superseded_resting(ctx: TraderContext, desired: Iterable[DesiredOrder]) -> set[int]:
+    """``id()`` of the resting intents that a desired order re-emits (same market, side, action and strategy,
+    the OMS's diff key): the OMS keeps or replaces them, so they are evaluated as that desired order."""
+    wanted = {_key(d.exchange_id, d.side, d.action, d.strategy) for d in desired if int(d.quantity) > 0}
+    out: set[int] = set()
+    matched: set[tuple[str, str, str, str]] = set()
+    for eid, mv in ctx.markets.items():
+        for intent in mv.open_orders or []:
+            k = _key(
+                getattr(intent, "exchange_id", eid), getattr(intent, "side", "yes"),
+                getattr(intent, "action", "buy"), getattr(intent, "strategy", ""),
+            )
+            if k in wanted and k not in matched:  # the OMS diffs one working order per key
+                matched.add(k)
+                out.add(id(intent))
+    return out
+
+
+def _resting_reservation(ctx: TraderContext, skip: Collection[int]) -> float:
+    """Cash the OMS reserves for the resting intents in ``skip`` (same rule as the OMS reservation)."""
+    total = 0.0
+    for mv in ctx.markets.values():
+        for intent in mv.open_orders or []:
+            if id(intent) not in skip:
+                continue
+            remaining = max(0, int(getattr(intent, "quantity", 0)) - int(getattr(intent, "filled_qty", 0) or 0))
+            price = float(getattr(intent, "price", 0.0))
+            if getattr(intent, "action", "buy") == "buy":
+                total += price * remaining
+            else:
+                owned = max(0, mv.position) if getattr(intent, "side", "yes") == "yes" else max(0, -mv.position)
+                total += (1.0 - price) * max(0, remaining - owned)
+    return total
+
+
+def resting_yes_qty(ctx: TraderContext, exclude: Collection[int] = ()) -> dict[str, float]:
+    """Signed YES quantity of resting (ACKED) intents per market, as if they filled (``exclude``: ``id()`` of
+    intents a desired order supersedes)."""
     out: dict[str, float] = {}
     for eid, mv in ctx.markets.items():
         for intent in mv.open_orders or []:
+            if id(intent) in exclude:
+                continue
             remaining = max(0, int(getattr(intent, "quantity", 0)) - int(getattr(intent, "filled_qty", 0) or 0))
             if remaining <= 0:
                 continue
@@ -224,10 +271,13 @@ def _add_leg(ctx: TraderContext, legs: dict[str, Leg], eid: str, yes_qty: float,
     )
 
 
-def combined_legs(ctx: TraderContext, candidates: Iterable[tuple[DesiredOrder, float]] = ()) -> dict[str, Leg]:
-    """Positions + resting orders + candidate orders (each scaled by its factor), netted per market."""
+def combined_legs(
+    ctx: TraderContext, candidates: Iterable[tuple[DesiredOrder, float]] = (), exclude: Collection[int] = ()
+) -> dict[str, Leg]:
+    """Positions + resting orders (less ``exclude``) + candidate orders (each scaled by its factor), netted
+    per market."""
     legs = {eid: replace(leg) for eid, leg in position_legs(ctx).items()}
-    for eid, q in resting_yes_qty(ctx).items():
+    for eid, q in resting_yes_qty(ctx, exclude).items():
         _add_leg(ctx, legs, eid, q, None)
     for d, f in candidates:
         if f <= 0:
@@ -434,7 +484,8 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
     objects with tick-rounded prices, sorted by priority."""
     cfg = ctx.cfg
     bankroll = ctx.bankroll_start if ctx.bankroll_start > 0 else max(ctx.equity, 1.0)
-    resting = resting_yes_qty(ctx)
+    skip = superseded_resting(ctx, desired)  # target semantics: never charge a re-emitted order twice
+    resting = resting_yes_qty(ctx, skip)
     cands: list[_Cand] = []
     for seq, d in enumerate(desired):
         d2 = replace(d, price=round_tick(d.price), quantity=int(d.quantity))
@@ -456,16 +507,20 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
             if c.dropped is None and not c.reducer:
                 c.dropped = "daily loss limit"
 
-    # 1. per-market position cap
-    for c in cands:
+    # 1. per-market position cap (candidates on the same market share the room, in priority order)
+    used: dict[str, float] = {}
+    for c in sorted(cands, key=lambda c: (c.order.priority, 0 if c.order.take else 1, c.seq)):
         if c.dropped is not None or c.reducer:
             continue
-        held = abs(_position(ctx, c.order.exchange_id)) + abs(resting.get(c.order.exchange_id, 0.0))
+        eid = c.order.exchange_id
+        held = abs(_position(ctx, eid)) + abs(resting.get(eid, 0.0)) + used.get(eid, 0.0)
         room = cfg.risk.max_position_shares - held
         if room <= 0:
             c.dropped = "max_position_shares"
-        elif c.quantity > room:
+            continue
+        if c.quantity > room:
             c.factor *= room / c.quantity
+        used[eid] = used.get(eid, 0.0) + c.quantity
     _settle_groups(cands, "max_position_shares")
 
     # 2. per-race cap (netted across legs)
@@ -474,7 +529,7 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         members = [c for c in cands if c.alive and _race_of(ctx, c.order.exchange_id) == race_id]
 
         def measure_race(pairs: list[tuple[DesiredOrder, float]], rid: str = race_id) -> float:
-            legs = combined_legs(ctx, pairs)
+            legs = combined_legs(ctx, pairs, skip)
             return _race_exposure_in(ctx, rid, (leg for leg in legs.values() if leg.race_id == rid))
 
         f = _bisect_factor(members, measure_race, race_cap)
@@ -489,7 +544,7 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         members = [c for c in cands if c.alive and _state_of(ctx, c.order.exchange_id) == state]
 
         def measure_state(pairs: list[tuple[DesiredOrder, float]], st: str = state) -> float:
-            legs = combined_legs(ctx, pairs)
+            legs = combined_legs(ctx, pairs, skip)
             return sum(exposures_by_race((lg for lg in legs.values() if lg.state == st), ctx).values())
 
         f = _bisect_factor(members, measure_state, state_cap)
@@ -504,7 +559,7 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         limit = cfg.risk.max_swing_loss_frac * bankroll
 
         def measure_swing(pairs: list[tuple[DesiredOrder, float]]) -> float:
-            return swing_loss(combined_legs(ctx, pairs).values(), cfg)
+            return swing_loss(combined_legs(ctx, pairs, skip).values(), cfg)
 
         f = _bisect_factor(live, measure_swing, limit)
         if f < 1.0:
@@ -517,7 +572,8 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         (c for c in cands if c.alive),
         key=lambda c: (c.order.priority, 0 if c.order.take else 1, c.seq),
     )
-    free = ctx.cash - ctx.reserved - reserve_amount(ctx)
+    reserved = max(0.0, ctx.reserved - _resting_reservation(ctx, skip))
+    free = ctx.cash - reserved - reserve_amount(ctx)
     seen_groups: set[str] = set()
     for c in ranked:
         if c.dropped is not None:

@@ -127,7 +127,7 @@ def test_stale_reference_ignored(db, cfg):
 def test_polls_only_recency_weighted_and_shrunk(db, cfg):
     info = race("SEN-TX", "senate", "TX")
     with dbengine.session() as s:
-        _seed_race(s, pvi=5.0, incumbent="R")  # fundamentals: generic - 5 - 1.5
+        _seed_race(s, pvi=5.0, incumbent="R")  # fundamentals: generic - 2 * 5 - 1.5 (PVI is a vote-share lean)
         s.add(GenericBallot(source="x", ts=NOW - timedelta(days=1), margin=8.0))
         _poll(s, "SEN-TX", 4.0, days_ago=0, pollster="fresh")
         _poll(s, "SEN-TX", -4.0, days_ago=7, pollster="old")  # half weight
@@ -137,7 +137,7 @@ def test_polls_only_recency_weighted_and_shrunk(db, cfg):
     assert set(fv.components) == {"polls"}
     avg = (4.0 * 1.0 + (-4.0) * 0.5) / 1.5
     n_eff = 1.5
-    fund = 8.0 - 5.0 - FV.INCUMBENCY_BUMP_PTS
+    fund = 8.0 - 2 * 5.0 - FV.INCUMBENCY_BUMP_PTS
     s_eff = max(cfg.fairvalue.fundamentals_shrink, 1 / (1 + n_eff))
     margin = (1 - s_eff) * avg + s_eff * fund
     assert fv.components["polls"] == pytest.approx(prob_from_margin(margin, "senate", cfg))
@@ -153,7 +153,7 @@ def test_fundamentals_only_when_no_polls(db, cfg):
     with dbengine.session() as s:
         out = FV.compute_all(s, cfg, _views(info), NOW)
     fv = out["HOUSE-PA-08-D"]
-    margin = 8.0 - 4.0 - FV.INCUMBENCY_BUMP_PTS
+    margin = 8.0 - 2 * 4.0 - FV.INCUMBENCY_BUMP_PTS
     assert fv.components["polls"] == pytest.approx(prob_from_margin(margin, "house", cfg))
     assert fv.sd > FV.SD_FLOOR_SINGLE  # lower availability -> wider
 
@@ -313,7 +313,7 @@ def test_reexports():
     assert FV.prob_from_margin is prob_from_margin
     assert callable(FV.implied_margin_shift) and callable(FV.margin_from_prob) and callable(FV.shift_probability)
     assert FV.fundamentals_margin(None, None, "D") is None
-    assert FV.fundamentals_margin(5.0, 8.0, "D") == pytest.approx(8.0 - 5.0 + FV.INCUMBENCY_BUMP_PTS)
+    assert FV.fundamentals_margin(5.0, 8.0, "D") == pytest.approx(8.0 - 2 * 5.0 + FV.INCUMBENCY_BUMP_PTS)
     avg, n = FV.poll_average([{"margin": 2.0, "end_date": NOW}, {"margin": 6.0, "end_date": NOW - timedelta(days=7)}], NOW, 7)
     assert n == pytest.approx(1.5) and avg == pytest.approx((2.0 + 3.0) / 1.5)
     assert FV.control_chamber(race("CONTROL-HOUSE", "control", None, label="House control")) == "house"

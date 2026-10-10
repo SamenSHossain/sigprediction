@@ -13,14 +13,16 @@ Contract (see ``sigcup.trader.types``)::
 Model notes
 -----------
 * ``ref``: liquidity-weighted mean of the latest Kalshi / Polymarket YES mids mapped through
-  ``Market.kalshi_ticker`` / ``Market.polymarket_condition_id``. Each source's weight is
+  ``Market.kalshi_ticker`` / ``Market.polymarket_condition_id`` that are younger than ``ref_max_age``
+  (``REF_MAX_AGE``; on election night ``NIGHT_REF_MAX_AGE_CADENCES`` collector cadences, at least
+  ``NIGHT_REF_MIN_AGE``). Each source's weight is
   ``min(1, liquidity / fairvalue.ref_min_liquidity)`` (unknown liquidity counts half). The component's
   availability is ``min(1, sum of source weights)`` so an illiquid single source carries less precision.
   Real-money prices are used *raw*: no Rothschild/Leigh-style debiasing stretch (the student book, not
   the real-money book, is the one with favourite-longshot bias).
 * ``polls``: recency-weighted poll margin (half-life ``fairvalue.poll_halflife_days``) shrunk toward a
-  fundamentals prior ``generic_ballot - PVI + incumbency`` (PVI positive = Republican lean, all in
-  D-minus-R points). The shrink weight is ``max(fundamentals_shrink, 1 / (1 + n_eff))`` so a single poll
+  fundamentals prior ``generic_ballot - 2 * PVI + incumbency`` (D-minus-R margin points; Cook's PVI is a
+  two-party vote-*share* lean, positive = Republican, so the margin lean is twice it). The shrink weight is ``max(fundamentals_shrink, 1 / (1 + n_eff))`` so a single poll
   is shrunk half-way. With no polls the prior is used alone at half availability. The two-party frame
   maps margins to P(D wins) through ``probmath.prob_from_margin``; the Republican leg is the complement.
 * ``ratings``: mean P(D) across the latest rating per source, parsed from the rating text through
@@ -28,18 +30,30 @@ Model notes
   back to the stored ``prob_dem``.
 * Independent / third-party legs: when the race also has D and R legs, the two-party components do not
   describe them (they would imply ~0), so only ``ref`` is used; if the race lacks a D (or R) leg the
-  independent leg takes that role in the two-party frame. ``1 - D - R`` is used for the ``ref`` component
-  when the leg has no crosswalk of its own but both major-party legs have references.
+  independent leg takes that role in the two-party frame. A major-party leg whose party fields no
+  candidate counts as missing: ``Race.candidates`` is trusted as the complete field when it lists two or
+  more parties and the race has an independent leg (NE Senate: R and I only). Such an empty leg is priced
+  from its own ``ref`` alone (no ref -> no fair value) and is left out of the simulation. When the
+  independent stands in for a major party the D-vs-R fundamentals prior (PVI, generic ballot) is not
+  used; real polls and ratings still are. ``1 - D - R`` is used for the ``ref`` component when an
+  independent leg has no crosswalk of its own but both major-party legs have references.
 * Blend: ``weights = fairvalue.weights[c] * availability[c]`` over the components that are present,
   renormalised; ``fair`` clamped to the tick range; ``sd`` from the weighted component disagreement plus a
-  floor (larger when only one component is present or availability is low).
+  floor (larger when only one component is present or when the components that *apply* to the leg are
+  not fully available: ref/polls/ratings for a two-party leg, ref for an independent leg, ref/sim for a
+  control market).
+* Election night (``election_night.start_utc`` until the deadline): polls, ratings and the simulation
+  cannot see results, so a leg with a fresh reference is priced from the reference alone; a leg whose
+  reference has gone stale keeps only its slow components (no ``ref``), which the taker rule reads as
+  "unconfirmed".
 * Control markets (chamber ``control``) blend the ``ref`` component with the correlated simulation's
   control probability (``simulate.simulate`` on the blended race fairs); the simulation stands in for the
   polls+ratings weight. Its availability is the squared coverage of the chamber's seat races (missing
   seats are assumed held by the incumbent party, so a partial universe says little about control).
   Either component alone is used when the other is missing.
-* ``FairValue.ts`` is the freshest *input* timestamp (reference price, poll fetch, rating), not ``now``,
-  so callers can tell whether a fair value predates a hard news event.
+* ``FairValue.ts`` is the freshest *input* timestamp (reference price, poll fetch, rating; for a control
+  market the reference or the newest seat fair value the simulation used), never ``now``, so callers can
+  tell whether a fair value predates a hard news event.
 """
 
 from __future__ import annotations
@@ -68,8 +82,11 @@ from sigcup.trader.probmath import (
 from sigcup.trader.types import FairValue, MarketView, RaceInfo
 
 __all__ = [
+    "NIGHT_REF_MAX_AGE_CADENCES",
+    "NIGHT_REF_MIN_AGE",
     "REF_MAX_AGE",
     "compute_all",
+    "election_night_active",
     "fundamentals_margin",
     "implied_margin_shift",
     "load_races",
@@ -77,6 +94,7 @@ __all__ = [
     "parse_rating",
     "poll_average",
     "prob_from_margin",
+    "ref_max_age",
     "shift_probability",
 ]
 
@@ -84,6 +102,8 @@ log = get_logger(__name__)
 
 # -- tunables that are not (yet) in settings.yaml -------------------------------------------------
 REF_MAX_AGE = timedelta(hours=24)  # reference prices older than this are ignored
+NIGHT_REF_MAX_AGE_CADENCES = 6  # on election night: references older than this many collector cadences ...
+NIGHT_REF_MIN_AGE = timedelta(seconds=60)  # ... (but never less than this) are stale
 POLL_MAX_AGE = timedelta(days=60)  # polls older than this are ignored outright
 RATING_MAX_AGE = timedelta(days=60)
 GENERIC_BALLOT_MAX_AGE = timedelta(days=30)
@@ -94,6 +114,9 @@ INDEPENDENT_FLOOR = 0.02  # P(YES) floor for an independent leg derived as 1 - D
 SD_FLOOR = 0.02
 SD_FLOOR_SINGLE = 0.04  # when only one component is present
 SD_AVAILABILITY_PENALTY = 0.05  # extra sd when the available precision is low
+TWO_PARTY_COMPONENTS = ("ref", "polls", "ratings")
+REF_ONLY = ("ref",)
+CONTROL_COMPONENTS = ("ref", "sim")
 _EPS = 1e-9
 
 
@@ -141,6 +164,22 @@ def _latest(a: datetime | None, b: datetime | None) -> datetime | None:
     if b is None:
         return a
     return max(a, b)
+
+
+def election_night_active(cfg: StrategyConfig, now: datetime) -> bool:
+    """True from ``election_night.start_utc`` (inclusive) until the deadline (exclusive); the same window as
+    ``election_night.is_active`` (kept here to avoid an import cycle)."""
+    now = ensure_utc(now)
+    return ensure_utc(cfg.election_night.start_utc) <= now < ensure_utc(cfg.deadline_utc)
+
+
+def ref_max_age(cfg: StrategyConfig, now: datetime) -> timedelta:
+    """Age beyond which a reference price is ignored: ``REF_MAX_AGE``, or on election night
+    ``NIGHT_REF_MAX_AGE_CADENCES`` collector cadences (at least ``NIGHT_REF_MIN_AGE``)."""
+    if election_night_active(cfg, now):
+        night = timedelta(seconds=NIGHT_REF_MAX_AGE_CADENCES * float(cfg.election_night.ref_cadence_s))
+        return max(NIGHT_REF_MIN_AGE, night)
+    return REF_MAX_AGE
 
 
 def control_chamber(race: RaceInfo) -> str | None:
@@ -283,14 +322,16 @@ def fundamentals_margin(
     incumbent_party: str | None,
     bump_pts: float = INCUMBENCY_BUMP_PTS,
 ) -> float | None:
-    """Fundamentals prior for the D - R margin (points): ``generic - PVI + incumbency``.
+    """Fundamentals prior for the D - R margin (points): ``generic - 2 * PVI + incumbency``.
 
-    PVI is Cook's convention (positive = Republican lean). Returns None when neither PVI nor a generic
-    ballot is known.
+    PVI is Cook's convention: positive = Republican lean, measured in two-party vote *share* (R+10 means
+    the Republican share runs 10 points above the nation), so its margin equivalent is twice the PVI; the
+    generic ballot is already a D-minus-R margin. Returns None when neither PVI nor a generic ballot is
+    known.
     """
     if pvi is None and generic_margin is None:
         return None
-    m = float(generic_margin or 0.0) - float(pvi or 0.0)
+    m = float(generic_margin or 0.0) - 2.0 * float(pvi or 0.0)
     role = _role(incumbent_party) if incumbent_party else "I"
     if role == "D":
         m += bump_pts
@@ -305,10 +346,14 @@ def _polls_pdem(
     generic: float | None,
     cfg: StrategyConfig,
     now: datetime,
+    fundamentals: bool = True,
 ) -> tuple[float | None, float, datetime | None]:
-    """(P(D), availability, freshest fetch time) from polls shrunk toward fundamentals."""
+    """(P(D), availability, freshest fetch time) from polls shrunk toward fundamentals.
+
+    ``fundamentals=False`` drops the PVI / generic-ballot prior (it describes a D-vs-R contest only).
+    """
     avg, n_eff = poll_average(polls, now, cfg.fairvalue.poll_halflife_days)
-    fund = fundamentals_margin(race.pvi, generic, race.incumbent_party)
+    fund = fundamentals_margin(race.pvi, generic, race.incumbent_party) if fundamentals else None
     newest: datetime | None = None
     for p in polls:
         if p.fetched_at is not None:
@@ -357,10 +402,12 @@ def _refs_for(
     refs: Mapping[tuple[str, str], Any],
     cfg: StrategyConfig,
     now: datetime,
+    max_age: timedelta | None = None,
 ) -> list[_Ref]:
     out: list[_Ref] = []
     if mrow is None:
         return out
+    max_age = REF_MAX_AGE if max_age is None else max_age
     keys = (("kalshi", mrow.kalshi_ticker), ("polymarket", mrow.polymarket_condition_id), ("predictit", mrow.predictit_id))
     for source, key in keys:
         if not key:
@@ -370,7 +417,7 @@ def _refs_for(
             continue
         ts = _get(row, "ts")
         ts = ensure_utc(ts) if isinstance(ts, datetime) else None
-        if ts is not None and now - ts > REF_MAX_AGE:
+        if ts is not None and now - ts > max_age:
             continue
         mid = _ref_mid(row)
         if mid is None:
@@ -404,12 +451,20 @@ def _ref_component(refs: list[_Ref]) -> tuple[float | None, float, float | None,
 
 
 # -- blend ----------------------------------------------------------------------------------------
-def blend(components: Mapping[str, float], availability: Mapping[str, float], cfg: StrategyConfig, weight_overrides: Mapping[str, float] | None = None) -> tuple[float, float, dict[str, float]] | None:
+def blend(
+    components: Mapping[str, float],
+    availability: Mapping[str, float],
+    cfg: StrategyConfig,
+    weight_overrides: Mapping[str, float] | None = None,
+    applicable: Iterable[str] | None = None,
+) -> tuple[float, float, dict[str, float]] | None:
     """Precision-weighted blend of the present components.
 
     Returns ``(fair, sd, normalised_weights)`` or None when nothing carries weight. Base weights come
     from ``fairvalue.weights`` (``weight_overrides`` can add keys such as ``sim``) and are scaled by each
-    component's availability in [0, 1] before renormalising over the components present.
+    component's availability in [0, 1] before renormalising over the components present. The
+    availability penalty in ``sd`` compares the carried weight with the full weight of the ``applicable``
+    components (every base key when omitted), so a leg is not penalised for inputs it can never have.
     """
     base = dict(cfg.fairvalue.weights)
     if weight_overrides:
@@ -427,11 +482,27 @@ def blend(components: Mapping[str, float], availability: Mapping[str, float], cf
     norm = {k: v / total for k, v in weights.items()}
     fair = sum(norm[k] * float(components[k]) for k in norm)
     disagreement = math.sqrt(sum(norm[k] * (float(components[k]) - fair) ** 2 for k in norm))
-    full = sum(float(base.get(k, 0.0)) for k in base) or 1.0
+    keys = list(base) if applicable is None else [k for k in applicable if k in base]
+    full = sum(float(base.get(k, 0.0)) for k in keys) or 1.0
     avail_total = min(1.0, total / full)
     floor = SD_FLOOR if len(norm) >= 2 else SD_FLOOR_SINGLE
     sd = math.sqrt(disagreement**2 + floor**2 + (SD_AVAILABILITY_PENALTY * (1.0 - avail_total)) ** 2)
     return _clamp(fair), sd, norm
+
+
+def _empty_major_roles(candidates: Any, roles: Mapping[str, str]) -> set[str]:
+    """Major-party roles ('D' / 'R') that have a leg in the race but field no candidate.
+
+    ``Race.candidates`` usually lists only the incumbent, so it is trusted as the complete field only when
+    it names candidates for two or more parties, and only in a race with an independent leg (which takes
+    the empty party's place in the two-party frame), e.g. NE Senate (R and I, no Democrat).
+    """
+    if not isinstance(candidates, Mapping):
+        return set()
+    fielded = {_role(str(party)) for party, who in candidates.items() if who}
+    if len(fielded) < 2 or "I" not in roles.values():
+        return set()
+    return {r for r in ("D", "R") if r in roles.values() and r not in fielded}
 
 
 # -- public API -----------------------------------------------------------------------------------
@@ -489,8 +560,11 @@ def compute_all(
     (callers treat a missing fair as "no opinion").
     """
     now = ensure_utc(now)
+    night = election_night_active(cfg, now)
+    max_age = ref_max_age(cfg, now)
     views = _iter_views(markets)
     races = load_races(session)
+    candidates = {rid: cands for rid, cands in session.execute(select(Race.race_id, Race.candidates)).all()}
     mrows = {m.exchange_id: m for m in session.execute(select(Market)).scalars().all()}
     refs = latest_ref_prices(session)
     generic = _generic_ballot(session, now)
@@ -526,45 +600,55 @@ def compute_all(
     race_fairs: dict[str, dict[str, float]] = {}
     control_views: dict[str, dict[str, MarketView]] = {}
 
+    seat_ts: dict[str, datetime] = {}  # chamber -> newest input time among the fairs the simulation uses
     for race_id, legs in by_race.items():
         race = races[race_id]
         if race.chamber == "control":
             control_views[race_id] = legs
             continue
         roles = {eid: _role(v.party) for eid, v in legs.items()}
-        present_roles = set(roles.values())
+        empty = _empty_major_roles(candidates.get(race_id), roles)
+        present_roles = {r for r in roles.values() if r not in empty}
+        # a major-party leg without a candidate has no place in the two-party frame
+        role_map = {eid: ("-" if r in empty else r) for eid, r in roles.items()}
         # the independent leg takes a missing major party's role in the two-party frame
-        role_map = dict(roles)
+        substituted = False
         if "D" not in present_roles and "I" in present_roles:
             for eid, role in roles.items():
                 if role == "I":
                     role_map[eid] = "D"
+                    substituted = True
                     break
         elif "R" not in present_roles and "I" in present_roles:
             for eid, role in roles.items():
                 if role == "I":
                     role_map[eid] = "R"
+                    substituted = True
                     break
-        p_dem_polls, avail_polls, ts_polls = _polls_pdem(race, polls_by_race.get(race_id, []), generic, cfg, now)
+        p_dem_polls, avail_polls, ts_polls = _polls_pdem(
+            race, polls_by_race.get(race_id, []), generic, cfg, now, fundamentals=not substituted
+        )
         p_dem_rat, ts_rat = _ratings_pdem(ratings_by_race.get(race_id, []), cfg, now)
         ref_by_eid: dict[str, tuple[float | None, float, float | None, datetime | None]] = {
-            eid: _ref_component(_refs_for(mrows.get(eid), refs, cfg, now)) for eid in legs
+            eid: _ref_component(_refs_for(mrows.get(eid), refs, cfg, now, max_age)) for eid in legs
         }
-        ref_by_role = {role_map[eid]: ref_by_eid[eid][0] for eid in legs if ref_by_eid[eid][0] is not None}
+        # by the leg's own party label: 1 - D - R prices an independent leg without a crosswalk
+        ref_by_label = {roles[eid]: ref_by_eid[eid][0] for eid in legs if ref_by_eid[eid][0] is not None}
         for eid, v in legs.items():
             role = role_map[eid]
             comps: dict[str, float] = {}
             avail: dict[str, float] = {}
             ts: datetime | None = None
             ref_mid, ref_avail, ref_liq, ref_ts = ref_by_eid[eid]
-            if ref_mid is None and role == "I" and "D" in ref_by_role and "R" in ref_by_role:
-                ref_mid = max(INDEPENDENT_FLOOR, 1.0 - ref_by_role["D"] - ref_by_role["R"])
+            if ref_mid is None and roles[eid] == "I" and "D" in ref_by_label and "R" in ref_by_label:
+                ref_mid = max(INDEPENDENT_FLOOR, 1.0 - ref_by_label["D"] - ref_by_label["R"])
                 ref_avail = 0.5
             if ref_mid is not None:
                 comps["ref"] = ref_mid
                 avail["ref"] = ref_avail
                 ts = _latest(ts, ref_ts)
-            if role in ("D", "R"):
+            two_party = role in ("D", "R") and not (night and ref_mid is not None)
+            if two_party:
                 if p_dem_polls is not None:
                     comps["polls"] = p_dem_polls if role == "D" else 1.0 - p_dem_polls
                     avail["polls"] = avail_polls
@@ -573,7 +657,7 @@ def compute_all(
                     comps["ratings"] = p_dem_rat if role == "D" else 1.0 - p_dem_rat
                     avail["ratings"] = 1.0
                     ts = _latest(ts, ts_rat)
-            res = blend(comps, avail, cfg)
+            res = blend(comps, avail, cfg, applicable=TWO_PARTY_COMPONENTS if two_party else REF_ONLY)
             if res is None:
                 continue
             fair, sd, weights = res
@@ -586,7 +670,11 @@ def compute_all(
                 ts=ts,
                 ref_liquidity=ref_liq,
             )
+            if role == "-":
+                continue  # an empty party cannot win the seat: not part of the simulation
             race_fairs.setdefault(race_id, {})[v.party] = fair
+            if ts is not None:
+                seat_ts[race.chamber] = _latest(seat_ts.get(race.chamber), ts)  # type: ignore[assignment]
 
     # control markets: simulation (on the blended race fairs) blended with the real-money reference
     sim_control: dict[str, float] = {}
@@ -610,16 +698,18 @@ def compute_all(
             comps = {}
             avail = {}
             ts = None
-            ref_mid, ref_avail, ref_liq, ref_ts = _ref_component(_refs_for(mrows.get(eid), refs, cfg, now))
+            ref_mid, ref_avail, ref_liq, ref_ts = _ref_component(_refs_for(mrows.get(eid), refs, cfg, now, max_age))
             if ref_mid is not None:
                 comps["ref"] = ref_mid
                 avail["ref"] = ref_avail
                 ts = _latest(ts, ref_ts)
-            if chamber in sim_control and role in ("D", "R"):
+            use_sim = not (night and ref_mid is not None)
+            if use_sim and chamber in sim_control and role in ("D", "R"):
                 p = float(sim_control[chamber])
                 comps["sim"] = p if role == "D" else 1.0 - p
                 avail["sim"] = sim_avail.get(chamber, 0.0)
-            res = blend(comps, avail, cfg, weight_overrides={"sim": sim_weight})
+                ts = _latest(ts, seat_ts.get(chamber or ""))
+            res = blend(comps, avail, cfg, weight_overrides={"sim": sim_weight}, applicable=CONTROL_COMPONENTS if use_sim else REF_ONLY)
             if res is None:
                 continue
             fair, sd, weights = res
@@ -629,7 +719,7 @@ def compute_all(
                 sd=sd,
                 components={k: float(x) for k, x in comps.items()},
                 weights=weights,
-                ts=ts or now,
+                ts=ts,
                 ref_liquidity=ref_liq,
             )
     return out

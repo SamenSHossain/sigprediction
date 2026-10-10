@@ -2,8 +2,11 @@
 
 - Wraps a read-only live client (or recorded quotes from the DB) for market data.
 - Orders rest in memory; a buy fills when its price >= best ask (sell when price <= best bid) at the
-  resting price; partial fills honour displayed size; expiry honoured.
-- Tracks cash, positions, fills with ids `paper:<n>`; cancel/cancel_all supported.
+  resting price; partial fills honour displayed size; expiry honoured. Displayed size this adapter took
+  stays taken across data refreshes until the level's price or size changes (paper trades never remove
+  real liquidity from the source, so an unchanged quote is the same liquidity).
+- Tracks cash, positions, fills with ids `paper:<run>:<n>` (orders `paper-<run>-o<n>`; ``run`` is unique per
+  adapter instance, so a restarted process never reuses an id already in the ledger); cancel/cancel_all.
 - Persists intents/fills with paper=True so reports can separate paper from live (done by the OMS,
   which is constructed with ``paper=True``; the adapter itself keeps everything in memory).
 
@@ -21,6 +24,7 @@ refresh and on every account/positions/orders/fills read.
 from __future__ import annotations
 
 import itertools
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,7 +35,7 @@ from sqlalchemy import select
 from sigcup.common.log import get_logger
 from sigcup.common.time import ensure_utc, utc_now
 from sigcup.db import engine as dbengine
-from sigcup.db.models import Market
+from sigcup.db.models import Fill, Market
 from sigcup.db.repo import latest_quotes
 from sigcup.settings import StrategyConfig
 from sigcup.sig.adapter import ExchangeAdapter
@@ -122,6 +126,7 @@ class PaperAdapter:
         budget: Budget | None = None,
         use_db_quotes: bool = True,
         tournament_id: str | None = "paper",
+        run_id: str | None = None,
     ) -> None:
         self.cfg = cfg
         self.source = source
@@ -138,10 +143,28 @@ class PaperAdapter:
         self.positions: dict[str, _Position] = {}
         self.writes: int = 0
         self.reads: int = 0
+        self.run_id = run_id or uuid.uuid4().hex[:8]
         self._ids = itertools.count(1)
         self._fill_ids = itertools.count(1)
         self.lease_s = 90.0
         self._in_flight: dict[str, datetime] = {}
+        # (exchange_id, "bid" | "ask") -> [price, displayed size, shares this adapter took from that level]
+        self._consumed: dict[tuple[str, str], list] = {}
+        self._raw: dict[tuple[str, str], tuple[float | None, int | None]] = {}  # last displayed level
+
+    def resume_from_ledger(self) -> int:
+        """Continue the paper book after a restart: replay the paper Fill rows into cash and positions (resting
+        paper orders do not survive a restart; the OMS reconciles them away). Returns the fills replayed."""
+        with dbengine.session() as s:
+            rows = s.execute(select(Fill).where(Fill.paper.is_(True)).order_by(Fill.ts, Fill.fill_id)).scalars().all()
+        for f in rows:
+            long_yes = (f.side == "yes") == (f.action == "buy")
+            yes_price = float(f.price) if f.side == "yes" else round_tick(1.0 - float(f.price))
+            pos = self.positions.setdefault(f.exchange_id, _Position())
+            self._apply_delta(pos, int(f.quantity) if long_yes else -int(f.quantity), yes_price)
+        if rows:
+            log.info("paper: resumed from %d recorded paper fills (cash %.0f)", len(rows), self.cash)
+        return len(rows)
 
     # -- market data helpers -------------------------------------------------------------------
     def set_top(
@@ -154,8 +177,32 @@ class PaperAdapter:
         last: float | None = None,
     ) -> None:
         """Set the best quotes for a market (tests / replay) and re-evaluate resting orders."""
-        self.tops[exchange_id] = _Top(bid, ask, bid_size, ask_size, last, self.clock())
+        self._store_top(exchange_id, _Top(bid, ask, bid_size, ask_size, last, self.clock()))
         self._match_all()
+
+    def _store_top(self, eid: str, top: _Top) -> None:
+        """Store a refreshed quote, netting out the displayed size this adapter already took from a level
+        whose price and size are unchanged (a changed level is new liquidity)."""
+        for side in ("bid", "ask"):
+            price, size = getattr(top, side), getattr(top, f"{side}_size")
+            self._raw[(eid, side)] = (price, size)
+            c = self._consumed.get((eid, side))
+            if c is None:
+                continue
+            if price is not None and size is not None and abs(price - c[0]) < 1e-9 and size == c[1]:
+                setattr(top, f"{side}_size", max(0, size - c[2]))
+            else:
+                del self._consumed[(eid, side)]
+        self.tops[eid] = top
+
+    def _note_consumed(self, eid: str, side: str, price: float, qty: int) -> None:
+        c = self._consumed.get((eid, side))
+        if c is not None and abs(c[0] - price) < 1e-9:
+            c[2] += qty
+            return
+        raw_price, raw_size = self._raw.get((eid, side), (None, None))
+        if raw_price is not None and raw_size is not None and abs(raw_price - price) < 1e-9:
+            self._consumed[(eid, side)] = [price, raw_size, qty]
 
     def _refresh_from_db(self) -> None:
         try:
@@ -165,7 +212,7 @@ class PaperAdapter:
             log.warning("paper: cannot read quotes from the DB: %s", e)
             return
         for eid, q in rows.items():
-            self.tops[eid] = _Top(q.bid, q.ask, q.bid_size, q.ask_size, q.last, ensure_utc(q.ts) if q.ts else None)
+            self._store_top(eid, _Top(q.bid, q.ask, q.bid_size, q.ask_size, q.last, ensure_utc(q.ts) if q.ts else None))
 
     def _snapshot(self, eid: str) -> PriceSnapshot:
         t = self.tops.get(eid, _Top())
@@ -215,11 +262,13 @@ class PaperAdapter:
         if qty <= 0:
             return
         self._fill(o, qty, now)
-        # consume displayed size so a second order cannot fill against the same liquidity
-        if o.yes_action == "buy" and top.ask_size is not None:
+        # consume displayed size so a second order (or the next refresh) cannot fill against the same liquidity
+        if o.yes_action == "buy" and top.ask_size is not None and top.ask is not None:
             top.ask_size = max(0, top.ask_size - qty)
-        elif o.yes_action == "sell" and top.bid_size is not None:
+            self._note_consumed(o.req.exchange_id, "ask", top.ask, qty)
+        elif o.yes_action == "sell" and top.bid_size is not None and top.bid is not None:
             top.bid_size = max(0, top.bid_size - qty)
+            self._note_consumed(o.req.exchange_id, "bid", top.bid, qty)
 
     def _fill(self, o: _Order, qty: int, now: datetime) -> FillInfo:
         price = float(o.req.price)  # at the resting price, in the order's side terms
@@ -235,7 +284,7 @@ class PaperAdapter:
         if o.remaining == 0:
             o.status = "filled"
         fill = FillInfo(
-            fill_id=f"paper:{next(self._fill_ids)}",
+            fill_id=f"paper:{self.run_id}:{next(self._fill_ids)}",
             order_id=o.order_id,
             exchange_id=eid,
             ts=now,
@@ -334,7 +383,7 @@ class PaperAdapter:
         if self.source is not None:
             snaps = await self.source.get_prices(exchange_ids)
             for eid, s in snaps.items():
-                self.tops[eid] = _Top(s.best_bid, s.best_ask, s.bid_size, s.ask_size, s.last, s.ts)
+                self._store_top(eid, _Top(s.best_bid, s.best_ask, s.bid_size, s.ask_size, s.last, s.ts))
             self._match_all()
             return snaps
         await self._read()
@@ -347,12 +396,12 @@ class PaperAdapter:
         if self.source is not None:
             book = await self.source.get_orderbook(exchange_id, depth)
             self.books[exchange_id] = book
-            self.tops[exchange_id] = _Top(
+            self._store_top(exchange_id, _Top(
                 book.best_bid, book.best_ask,
                 book.bids[0].quantity if book.bids else None,
                 book.asks[0].quantity if book.asks else None,
                 self.tops.get(exchange_id, _Top()).last, book.ts,
-            )
+            ))
             self._match_all()
             return book
         await self._read()
@@ -468,7 +517,7 @@ class PaperAdapter:
         self._expire(now)
         self._validate(req)
         o = _Order(
-            order_id=f"paper-o{next(self._ids)}",
+            order_id=f"paper-{self.run_id}-o{next(self._ids)}",
             req=req,
             created_at=now,
             expires_at=ensure_utc(req.expires_at) if req.expires_at else None,
@@ -496,7 +545,7 @@ class PaperAdapter:
                 results.append(self._result(self.orders[self.by_key[leg.idempotency_key]]))
                 continue
             o = _Order(
-                order_id=f"paper-o{next(self._ids)}",
+                order_id=f"paper-{self.run_id}-o{next(self._ids)}",
                 req=leg,
                 created_at=now,
                 expires_at=ensure_utc(leg.expires_at) if leg.expires_at else None,
@@ -505,7 +554,7 @@ class PaperAdapter:
             self.by_key[leg.idempotency_key] = o.order_id
             self._match(o, now)
             results.append(self._result(o))
-        return MultiLegResult(group_id=f"paper-g{next(self._ids)}", results=results, atomic_ok=True)
+        return MultiLegResult(group_id=f"paper-{self.run_id}-g{next(self._ids)}", results=results, atomic_ok=True)
 
     async def cancel_order(self, order_id: str) -> bool:
         await self._write()

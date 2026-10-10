@@ -7,6 +7,9 @@ behaviour per POST with that key; ``fake.default_script`` applies to keys withou
 - "uncertain": the order IS recorded but the response is lost (OrderResult.uncertain=True).
 - "lost": the request never reached the exchange (nothing recorded, uncertain response).
 - an Exception instance: raised as-is.
+
+``fake.cancel_script`` pops one behaviour per DELETE: an Exception instance is raised, and "false" returns
+False while leaving the order live (an unconfirmed cancel).
 """
 
 from __future__ import annotations
@@ -120,7 +123,13 @@ class FakeAdapter:
         pos = self.positions.get(o.req.exchange_id)
         q = (pos.quantity if pos else 0) + delta
         self.positions[o.req.exchange_id] = PositionInfo(exchange_id=o.req.exchange_id, quantity=q, avg_price=yes_price, mark=yes_price)
-        self.cash -= price * qty
+        if o.req.action == "buy":
+            self.cash -= price * qty
+        else:  # selling owned shares returns cash; the unowned part fills as the opposite buy at 1 - price
+            held = pos.quantity if pos else 0
+            owned = max(0, held) if o.req.side == "yes" else max(0, -held)
+            covered = min(owned, qty)
+            self.cash += price * covered - (1 - price) * (qty - covered)
         return f
 
     def expire_all(self) -> int:
@@ -262,6 +271,8 @@ class FakeAdapter:
             b = self.cancel_script.pop(0)
             if isinstance(b, BaseException):
                 raise b
+            if b == "false":
+                return False
         o = self.orders.get(order_id)
         if o is None or o.status != "open":
             return False

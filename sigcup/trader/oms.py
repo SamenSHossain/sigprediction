@@ -11,7 +11,11 @@ Rules (owner: execution workstream):
   order expire over cancel+replace (1 write vs 2).
 - Every order gets expires_at = now + risk.order_expiry_s; nothing is sent after config.deadline_utc.
 - Kill switch: if the kill file exists or the daily-loss limit trips -> cancel_all, mark state, stop.
+  ``kill`` never waits for a running sync / reconcile (every send checks ``killed`` first), confirms from the
+  open orders that nothing is left (cancelling leftovers one by one) and is retried until it is confirmed.
 - Internal cash reservation for resting buys (exchange does not reserve).
+- Paper and live share the database: the kill flag lives under its own key per mode, and a paper OMS stops
+  writing the shared Position / AccountSnap tables once a live trader has used the database.
 
 State machine per intent (intent.id == idempotency key)::
 
@@ -29,20 +33,20 @@ a kill, and defers the rest to the next sync in priority order.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from sigcup.common.ids import new_idempotency_key
 from sigcup.common.log import get_logger
 from sigcup.common.time import before_deadline, ensure_utc, utc_now
 from sigcup.db import engine as dbengine
-from sigcup.db.models import AccountSnap, Fill, IntentState, OrderIntent, Position, Strategy
+from sigcup.db.models import KV, AccountSnap, Fill, IntentState, OrderIntent, Position, Strategy
 from sigcup.db.repo import kv_get, kv_set
 from sigcup.settings import StrategyConfig
 from sigcup.sig.adapter import ExchangeAdapter
@@ -68,8 +72,11 @@ from sigcup.trader.types import (
 
 log = get_logger(__name__)
 
-KV_KILLED = "killed"
+KV_KILLED = "killed"  # the live trader's flag (also what `sigcup kill --clear` clears)
+KV_KILLED_PAPER = "killed:paper"
+KV_LIVE_SEEN = "oms.live_seen"  # set by a live OMS: paper stops writing the shared Position / AccountSnap rows
 LEASE_S = 90.0
+LEASE_POLL_S = 5.0  # the lease is slept in steps so a kill is noticed promptly
 WORKING_STATES = {IntentState.SENT.value, IntentState.UNCERTAIN.value, IntentState.ACKED.value}
 OPEN_STATES = WORKING_STATES | {IntentState.NEW.value}
 _UNCERTAIN_EXC: tuple[type[BaseException], ...] = (
@@ -182,12 +189,19 @@ class OMS:
         self.positions_value: float = 0.0
         self.reserved: float = 0.0
         self.killed: str | None = None
+        self.kill_confirmed: bool = False  # True once a kill saw no open orders left
         self.auth_failed: bool = False
         self.last_fill_ts: datetime | None = None
         self.last_reconcile: ReconcileReport | None = None
         self._last_quote_at: dict[Key, datetime] = {}
         self._lock = asyncio.Lock()
         self._seen_fills: set[str] = set()
+        # intents whose cancel the exchange did not confirm: left alone until a reconcile classifies them
+        self._cancel_unconfirmed: set[str] = set()
+
+    @property
+    def _kv_killed(self) -> str:
+        return KV_KILLED_PAPER if self.paper else KV_KILLED
 
     # -- properties ----------------------------------------------------------------------------
     @property
@@ -280,11 +294,37 @@ class OMS:
         self.reserved = sum(self._cash_required(i) for i in self.working())
         return self.reserved
 
+    def _book_fill(self, intent: OrderIntent, qty: int, price: float) -> None:
+        """Reflect shares the exchange reported as traded (at placement, or found after a 409) in cash,
+        positions and positions value until the next reconcile refreshes them from the account, so spent
+        cash never looks free. Valued at the trade price, so equity (and the daily P&L) does not move."""
+        if qty <= 0:
+            return
+        eid = intent.exchange_id
+        pos = self.positions.get(eid)
+        held = pos.quantity if pos else 0
+        if intent.action == "buy":
+            cash_delta = -price * qty
+        else:  # owned shares return cash; the unowned part fills as the opposite buy at 1 - price
+            owned = max(0, held) if intent.side == "yes" else max(0, -held)
+            covered = min(owned, qty)
+            cash_delta = price * covered - (1.0 - price) * (qty - covered)
+        self.cash += cash_delta
+        self.positions_value -= cash_delta
+        long_yes = (intent.side == "yes") == (intent.action == "buy")
+        self.positions[eid] = PositionInfo(
+            exchange_id=eid,
+            quantity=held + (qty if long_yes else -qty),
+            avg_price=pos.avg_price if pos else price,
+            mark=pos.mark if pos else None,
+        )
+
     # -- the state machine ---------------------------------------------------------------------
     def _apply_result(self, intent: OrderIntent, res: OrderResult) -> None:
         order_id = res.order_id or intent.sig_order_id
         traded = int(res.quantity_traded or 0)
-        filled = max(int(intent.filled_qty or 0), traded)
+        prev_filled = int(intent.filled_qty or 0)
+        filled = max(prev_filled, traded)
         avg = intent.avg_fill
         if traded > 0:
             if res.fill_price is not None:
@@ -304,6 +344,8 @@ class OMS:
             self._set_state(intent, IntentState.EXPIRED, sig_order_id=order_id, filled_qty=filled, avg_fill=avg)
         else:
             self._set_state(intent, IntentState.ACKED, sig_order_id=order_id, filled_qty=filled, avg_fill=avg)
+        new_filled = int(intent.filled_qty or 0)
+        self._book_fill(intent, new_filled - prev_filled, float(avg if avg is not None else intent.price))
         self._recompute_reserved()
 
     async def _submit(self, intent: OrderIntent) -> OrderIntent:
@@ -353,24 +395,38 @@ class OMS:
             if attempt > self.max_retries:
                 log.error("intent %s still UNCERTAIN after %d attempts; reconcile will resolve it", intent.id[:8], attempt)
                 return intent
+            if not self.may_send():
+                continue  # killed / deadline / auth: the loop head stops without waiting out a backoff
             await self.sleep(self.backoff_s * (2 ** (attempt - 1)))
 
     async def _resolve_after_lease(self, intent: OrderIntent) -> bool:
-        """After a 409: wait out the idempotency lease, then look for the order in open orders / fills."""
-        await self.sleep(self.lease_s)
+        """After a 409: wait out the idempotency lease, then look for the order in open orders / fills.
+        The lease is slept in short steps and abandoned as soon as the kill switch fires."""
+        waited = 0.0
+        while waited < self.lease_s and self.killed is None:
+            step = min(LEASE_POLL_S, self.lease_s - waited)
+            await self.sleep(step)
+            waited += step
+        if self.killed is not None:
+            return False
+        prev_filled = int(intent.filled_qty or 0)
         try:
             open_orders = await self.adapter.get_open_orders()
         except Exception as e:  # noqa: BLE001
             log.warning("poll open orders failed: %s", e)
             return False
-        if self._adopt_open(intent, open_orders):
-            return True
-        try:
-            fills = await self.adapter.get_fills(since=ensure_utc(intent.created_at) - timedelta(minutes=5))
-        except Exception as e:  # noqa: BLE001
-            log.warning("poll fills failed: %s", e)
-            return False
-        return self._adopt_fills(intent, fills)
+        resolved = self._adopt_open(intent, open_orders)
+        if not resolved:
+            try:
+                fills = await self.adapter.get_fills(since=ensure_utc(intent.created_at) - timedelta(minutes=5))
+            except Exception as e:  # noqa: BLE001
+                log.warning("poll fills failed: %s", e)
+                return False
+            resolved = self._adopt_fills(intent, fills)
+        if resolved:
+            self._book_fill(intent, int(intent.filled_qty or 0) - prev_filled, float(intent.avg_fill or intent.price))
+            self._recompute_reserved()
+        return resolved
 
     def _adopt_open(self, intent: OrderIntent, open_orders: Iterable[OrderInfo]) -> bool:
         """Match an intent to an open order by idempotency key (or known order id) and mark it ACKED."""
@@ -413,6 +469,8 @@ class OMS:
     def _record_fills(self, fills: Iterable[FillInfo], intent: OrderIntent | None) -> list[FillInfo]:
         """Insert Fill rows (idempotent by fill_id). Returns the fills that were actually new."""
         new: list[FillInfo] = []
+        fills = list(fills)
+        self._advance_fill_cursor(fills)
         with dbengine.session() as s:
             for f in fills:
                 if f.fill_id in self._seen_fills or s.get(Fill, f.fill_id) is not None:
@@ -436,24 +494,31 @@ class OMS:
                 )
                 self._seen_fills.add(f.fill_id)
                 new.append(f)
-                ts = ensure_utc(f.ts)
-                if self.last_fill_ts is None or ts > self.last_fill_ts:
-                    self.last_fill_ts = ts
         return new
+
+    def _advance_fill_cursor(self, fills: Iterable[FillInfo]) -> None:
+        """Move the fills cursor over every fill seen, new or already recorded."""
+        for f in fills:
+            ts = ensure_utc(f.ts)
+            if self.last_fill_ts is None or ts > self.last_fill_ts:
+                self.last_fill_ts = ts
 
     # -- public: startup -----------------------------------------------------------------------
     async def startup_reconcile(self) -> ReconcileReport:
         """Resolve every NEW/SENT/UNCERTAIN/ACKED intent against the exchange before quoting anything."""
         async with self._lock:
             with dbengine.session() as s:
-                flag = kv_get(s, KV_KILLED)
-            if flag:
-                self.killed = str(flag.get("reason", "killed")) if isinstance(flag, dict) else str(flag)
+                reason = self._load_kill_flag(s)
+            if reason is not None and self.killed is None:
+                self.killed = reason
                 log.critical("kill flag is set in KV (%s): trading disabled until cleared", self.killed)
             rows = self._load_intents()
             self.intents = {r.id: r for r in rows}
             with dbengine.session() as s:
                 self._seen_fills = set(s.execute(select(Fill.fill_id).where(Fill.paper == self.paper)).scalars().all())
+                last = s.execute(select(func.max(Fill.ts)).where(Fill.paper == self.paper)).scalar()
+            if last is not None and (self.last_fill_ts is None or ensure_utc(last) > self.last_fill_ts):
+                self.last_fill_ts = ensure_utc(last)  # read fills from here on, not the whole history
             log.info("startup: %d open intents to reconcile, %d fills already recorded", len(rows), len(self._seen_fills))
             open_orders = await self.adapter.get_open_orders()
             unresolved = [r for r in rows if str(r.state) in WORKING_STATES]
@@ -464,7 +529,33 @@ class OMS:
             for intent in rows:
                 await self._resolve_intent(intent, open_orders, fills, allow_resend=True)
             self._recompute_reserved()
+            if self.killed is not None:
+                if open_orders:  # a kill that was never confirmed: nothing may stay open while killed
+                    log.critical("killed with %d open orders: cancelling them", len(open_orders))
+                    await self.confirm_kill()
+                else:
+                    self.kill_confirmed = True
             return await self._reconcile_locked(open_orders=None)
+
+    def _load_kill_flag(self, s: Any) -> str | None:
+        """This mode's persisted kill reason. A flag written by the other mode is ignored, and a paper flag
+        counts as cleared once the shared live key was cleared after it (what `sigcup kill --clear` does)."""
+        flag = kv_get(s, self._kv_killed)
+        if not flag:
+            return None
+        if isinstance(flag, dict) and bool(flag.get("paper", False)) != self.paper:
+            log.warning("ignoring a kill flag written by the %s trader: %s", "paper" if flag.get("paper") else "live", flag)
+            return None
+        if self.paper:
+            shared, own = s.get(KV, KV_KILLED), s.get(KV, KV_KILLED_PAPER)
+            if (
+                shared is not None and shared.value is None and own is not None
+                and ensure_utc(shared.updated_at) > ensure_utc(own.updated_at)
+            ):
+                log.info("paper kill flag was cleared with the shared flag: resuming")
+                kv_set(s, KV_KILLED_PAPER, None)
+                return None
+        return str(flag.get("reason", "killed")) if isinstance(flag, dict) else str(flag)
 
     async def _resolve_intent(
         self,
@@ -508,7 +599,7 @@ class OMS:
             rep = SyncReport()
             now = self.clock()
             if self.kill_path is not None and self.kill_path.exists() and self.killed is None:
-                await self._kill_locked(f"kill file present: {self.kill_path}")
+                await self.kill(f"kill file present: {self.kill_path}")
             if self.killed is not None:
                 rep.blocked = rep.killed = self.killed
                 return rep
@@ -542,6 +633,9 @@ class OMS:
                         rep.errors.append(f"{a.kind}: {e}")
 
             await asyncio.gather(*(run(a) for a in chosen))
+            if self.killed is not None:  # the kill landed mid-sync: sweep whatever was already on the wire
+                rep.killed = self.killed
+                await self.confirm_kill()
             self._recompute_reserved()
             return rep
 
@@ -577,6 +671,8 @@ class OMS:
             w = working.get(k)
             if w is None:
                 actions.append(_Action("place", d.priority, d.take, seq, 1, [d]))
+            elif not self._settled(w):
+                rep.kept += 1  # SENT / UNCERTAIN or an unconfirmed cancel: reconcile resolves it first
             else:
                 decision = self._requote_decision(w, d, k, now)
                 if decision == "replace":
@@ -593,15 +689,25 @@ class OMS:
                 continue
             actions.append(_Action("group", min(d.priority for d in legs), any(d.take for d in legs), seq, 1, legs))
             seq += 1
+        fresh_s = self.cfg.cadence.model_s / 2
         for k, w in working.items():
-            if k in desired_keys or str(w.state) != IntentState.ACKED.value:
+            if k in desired_keys or not self._settled(w):
                 continue
             remaining = (ensure_utc(w.expires_at) - now).total_seconds() if w.expires_at else 0.0
             if remaining > self.cfg.value.requote_cooldown_s:
-                actions.append(_Action("cancel", PRIORITY_HOUSEKEEPING, False, seq, 1, [], w))
+                # a withdrawal reduces risk: it goes ahead of new placements (after arb / takes), unless the
+                # order was quoted moments ago (no later model cycle can have withdrawn it yet)
+                quoted = self._last_quote_at.get(k)
+                fresh = quoted is not None and (now - quoted).total_seconds() < fresh_s
+                actions.append(_Action("cancel", PRIORITY_HOUSEKEEPING if fresh else PRIORITY_ARB, False, seq, 1, [], w))
                 seq += 1
         actions.sort(key=lambda a: (a.priority, 0 if a.take else 1, a.seq))
         return actions
+
+    def _settled(self, w: OrderIntent) -> bool:
+        """An ACKED intent whose order id is known and whose last cancel was not left unconfirmed: the only
+        kind that may be cancelled or replaced (anything else could leave two live orders)."""
+        return str(w.state) == IntentState.ACKED.value and bool(w.sig_order_id) and w.id not in self._cancel_unconfirmed
 
     def _requote_decision(self, w: OrderIntent, d: DesiredOrder, k: Key, now: datetime) -> str:
         """keep | wait | replace. Replace only for adverse moves, large moves or takes; otherwise let the
@@ -712,9 +818,11 @@ class OMS:
                 rep.placed.append(i.id)
 
     async def _cancel(self, intent: OrderIntent) -> bool:
+        """True only when the exchange confirmed the cancel. Anything else (no order id yet, an error, or a
+        False that may hide a live order) leaves the intent as it is for reconcile to classify."""
         if not intent.sig_order_id:
-            self._set_state(intent, IntentState.CANCELLED, error="cancelled before ack")
-            return True
+            log.info("cancel %s: no exchange order id yet (%s); reconcile resolves it first", intent.id[:8], intent.state)
+            return False
         try:
             ok = await self.adapter.cancel_order(intent.sig_order_id)
         except (ValidationError, SigError) as e:
@@ -724,9 +832,11 @@ class OMS:
             log.warning("cancel %s uncertain: %s", intent.id[:8], e)
             return False
         if not ok:
-            # already gone (filled / expired): reconcile decides which
-            log.info("cancel %s: exchange reports no open order; reconcile will classify", intent.id[:8])
-        self._set_state(intent, IntentState.CANCELLED, error=None if ok else "cancel returned false")
+            # gone (filled / expired) or not cancelled: reconcile decides from the open orders and fills
+            log.info("cancel %s not confirmed; left for reconcile to classify", intent.id[:8])
+            self._cancel_unconfirmed.add(intent.id)
+            return False
+        self._set_state(intent, IntentState.CANCELLED)
         self._recompute_reserved()
         return True
 
@@ -734,7 +844,11 @@ class OMS:
     async def reconcile(self) -> ReconcileReport:
         """Pull account / positions / open orders / fills, persist them, repair intents and check invariants."""
         async with self._lock:
-            return await self._reconcile_locked()
+            killed_before = self.killed
+            rep = await self._reconcile_locked()
+            if killed_before is None and self.killed is not None:  # a resend may have been on the wire
+                await self.confirm_kill()
+            return rep
 
     async def _reconcile_locked(self, open_orders: list[OrderInfo] | None = None) -> ReconcileReport:
         rep = ReconcileReport()
@@ -751,6 +865,7 @@ class OMS:
             open_orders = list(await self.adapter.get_open_orders())
         since = (self.last_fill_ts - timedelta(minutes=2)) if self.last_fill_ts else None
         fills = list(await self.adapter.get_fills(since=since))
+        self._advance_fill_cursor(fills)
 
         # fills ledger
         by_order: dict[str, OrderIntent] = {i.sig_order_id: i for i in self.intents.values() if i.sig_order_id}
@@ -768,7 +883,7 @@ class OMS:
             inserted = self._record_fills(fs, i)
             rep.new_fills += len(inserted)
             if inserted:
-                self._apply_fill_rows(i, inserted)
+                self._apply_fill_rows(i)
         if orphan_fills:
             inserted = self._record_fills(orphan_fills, None)
             rep.new_fills += len(inserted)
@@ -792,6 +907,7 @@ class OMS:
             await self._resolve_intent(i, open_orders, fills, allow_resend=self.may_send(now))
             if str(i.state) != before:
                 rep.repaired.append(f"{i.id[:8]} {before} -> {i.state}")
+        self._cancel_unconfirmed.clear()  # every unconfirmed cancel is classified from fresh open orders now
         known_ids = {i.sig_order_id for i in self.working() if i.sig_order_id}
         for o in open_orders:
             if o.order_id in known_ids:
@@ -805,7 +921,9 @@ class OMS:
             have = self.positions[eid].quantity if eid in self.positions else 0
             if q != have:
                 rep.discrepancies.append(f"{eid}: fills ledger {q} != exchange position {have}")
-        self._write_positions(positions, now)
+        shared = self._may_write_shared_tables()
+        if shared:
+            self._write_positions(positions, now)
 
         # reservation <= cash
         self._recompute_reserved()
@@ -813,10 +931,11 @@ class OMS:
             rep.discrepancies.append(f"reservation {self.reserved:.0f} > cash {self.cash:.0f}")
             cancelled = await self._shed_buys(limit=3)
             rep.repaired.extend(f"cancelled {iid[:8]} to restore reservation <= cash" for iid in cancelled)
-        with dbengine.session() as s:
-            s.add(
-                AccountSnap(ts=now, cash=self.cash, positions_value=self.positions_value, total=self.equity, reserved=self.reserved)
-            )
+        if shared:
+            with dbengine.session() as s:
+                s.add(
+                    AccountSnap(ts=now, cash=self.cash, positions_value=self.positions_value, total=self.equity, reserved=self.reserved)
+                )
         rep.cash, rep.positions_value, rep.reserved = self.cash, self.positions_value, self.reserved
         rep.open_orders, rep.working_intents = len(open_orders), len(self.working())
         for d in rep.discrepancies:
@@ -826,20 +945,47 @@ class OMS:
         self.last_reconcile = rep
         return rep
 
-    def _apply_fill_rows(self, i: OrderIntent, fs: list[FillInfo]) -> None:
-        qty = sum(int(f.quantity) for f in fs)
-        cost = sum(float(f.price) * int(f.quantity) for f in fs)
-        prev_q = int(i.filled_qty or 0)
-        prev_cost = (i.avg_fill or 0.0) * prev_q
-        new_q = prev_q + qty
-        i.filled_qty = new_q
-        i.avg_fill = (prev_cost + cost) / new_q if new_q else i.avg_fill
-        if new_q >= int(i.quantity) and str(i.state) in WORKING_STATES:
+    def _may_write_shared_tables(self) -> bool:
+        """Position / AccountSnap rows carry no paper flag: a live OMS always writes them (and marks the
+        database as live); a paper OMS only while no live trader has used this database."""
+        with dbengine.session() as s:
+            if not self.paper:
+                if not kv_get(s, KV_LIVE_SEEN):
+                    kv_set(s, KV_LIVE_SEEN, {"ts": self.clock().isoformat()})
+                return True
+            return not kv_get(s, KV_LIVE_SEEN)
+
+    def _apply_fill_rows(self, i: OrderIntent) -> None:
+        """Fill rows are the ledger: ``filled_qty`` is the larger of what is already known (e.g. the quantity a
+        placement response reported as traded) and the sum of every Fill row recorded for this order, so the
+        same shares are never counted twice."""
+        cond = Fill.intent_id == i.id
+        if i.sig_order_id:
+            cond = or_(cond, Fill.sig_order_id == i.sig_order_id)
+        with dbengine.session() as s:
+            rows = s.execute(select(Fill.quantity, Fill.price).where(Fill.paper == self.paper, cond)).all()
+        qty = sum(int(q) for q, _ in rows)
+        cost = sum(float(p) * int(q) for q, p in rows)
+        if qty > 0 and qty >= int(i.filled_qty or 0):
+            i.filled_qty, i.avg_fill = qty, cost / qty
+        if int(i.filled_qty or 0) >= int(i.quantity) and str(i.state) in WORKING_STATES:
             self._set_state(i, IntentState.FILLED)
         else:
             self._persist(i)
 
     def _adopt_orphan(self, o: OrderInfo, now: datetime) -> None:
+        own = self.intents.get(o.idempotency_key or "")
+        if own is None and o.idempotency_key:
+            with dbengine.session() as s:
+                row = s.get(OrderIntent, o.idempotency_key)
+            if row is not None and bool(row.paper) == self.paper:
+                own = row
+        if own is not None:  # one of ours that was closed locally while still open: revive it, keep its strategy
+            self._set_state(
+                own, IntentState.ACKED, error="revived: still open on the exchange", sig_order_id=o.order_id,
+                filled_qty=max(int(o.filled or 0), int(own.filled_qty or 0)),
+            )
+            return
         intent = OrderIntent(
             id=o.idempotency_key or new_idempotency_key(),
             exchange_id=o.exchange_id or "?",
@@ -897,22 +1043,66 @@ class OMS:
         return cancelled
 
     # -- public: kill / cancel-all -------------------------------------------------------------
-    async def kill(self, reason: str) -> None:
-        """Cancel everything, mark the KV 'killed' flag and refuse all further sends."""
-        async with self._lock:
-            await self._kill_locked(reason)
+    async def kill(self, reason: str) -> bool:
+        """Kill switch: refuse all further sends at once, persist the flag, cancel everything and confirm it.
 
-    async def _kill_locked(self, reason: str) -> None:
+        Never waits for the lock: a sync or reconcile in progress checks ``killed`` before every send (and
+        abandons a lease wait), and sweeps again when it finishes in case a request was already on the wire.
+        Returns True once no open order is left; otherwise ``confirm_kill`` must be retried."""
         if self.killed is not None:
-            return
+            return self.kill_confirmed
         log.critical("KILL SWITCH: %s", reason)
         self.killed = reason
-        try:
-            await self._cancel_all_locked()
-        except Exception:  # noqa: BLE001
-            log.exception("cancel_all failed during kill")
+        self.kill_confirmed = False
         with dbengine.session() as s:
-            kv_set(s, KV_KILLED, {"reason": reason, "ts": self.clock().isoformat(), "paper": self.paper})
+            kv_set(s, self._kv_killed, {"reason": reason, "ts": self.clock().isoformat(), "paper": self.paper})
+        return await self.confirm_kill()
+
+    async def confirm_kill(self, attempts: int = 3) -> bool:
+        """cancel-all, then confirm from the open orders, cancelling any leftover one by one; retried with
+        backoff. Intents are marked CANCELLED only once their order is confirmed gone."""
+        open_orders: list[OrderInfo] | None = None
+        for attempt in range(max(1, attempts)):
+            if attempt:
+                await self.sleep(self.backoff_s * (2 ** (attempt - 1)))
+            try:
+                n = await self.adapter.cancel_all()
+                log.info("kill: cancel_all cancelled %s orders", n)
+            except Exception as e:  # noqa: BLE001 - a failed or partial cancel-all is verified below
+                log.error("kill: cancel_all failed: %s", e)
+            open_orders = await self._open_orders_or_none()
+            if open_orders:
+                for o in open_orders:
+                    try:
+                        await self.adapter.cancel_order(o.order_id)
+                    except Exception as e:  # noqa: BLE001
+                        log.error("kill: cancel %s failed: %s", o.order_id, e)
+                open_orders = await self._open_orders_or_none()
+            if open_orders == []:
+                break
+        if open_orders is not None:
+            self._mark_gone_cancelled(open_orders)
+        self.kill_confirmed = open_orders == []
+        if not self.kill_confirmed:
+            left = "unknown" if open_orders is None else len(open_orders)
+            log.critical("kill: open orders not confirmed gone (%s left); will retry", left)
+        return self.kill_confirmed
+
+    async def _open_orders_or_none(self) -> list[OrderInfo] | None:
+        try:
+            return list(await self.adapter.get_open_orders())
+        except Exception as e:  # noqa: BLE001
+            log.error("kill: cannot read open orders: %s", e)
+            return None
+
+    def _mark_gone_cancelled(self, open_orders: Sequence[OrderInfo]) -> None:
+        live_ids = {o.order_id for o in open_orders}
+        live_keys = {o.idempotency_key for o in open_orders if o.idempotency_key}
+        for i in self.working():
+            if (i.sig_order_id and i.sig_order_id in live_ids) or i.id in live_keys:
+                continue
+            self._set_state(i, IntentState.CANCELLED, error="cancel_all")
+        self._recompute_reserved()
 
     async def cancel_all(self) -> int:
         """Cancel every resting order (used on shutdown and by the kill switch)."""
@@ -928,10 +1118,12 @@ class OMS:
         return int(n or 0)
 
     @staticmethod
-    def clear_killed() -> None:
-        """Clear the persistent kill flag (operator action after investigating)."""
+    def clear_killed(paper: bool | None = None) -> None:
+        """Clear the persistent kill flag (operator action after investigating): live, paper or both (None)."""
+        keys = [KV_KILLED, KV_KILLED_PAPER] if paper is None else [KV_KILLED_PAPER if paper else KV_KILLED]
         with dbengine.session() as s:
-            kv_set(s, KV_KILLED, None)
+            for key in keys:
+                kv_set(s, key, None)
 
 
 def _position_value(p: PositionInfo) -> float:

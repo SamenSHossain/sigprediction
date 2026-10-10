@@ -148,7 +148,11 @@ def test_convex_sleeve(cfg):
     value = {d.exchange_id: d for d in out if d.strategy == Strategy.VALUE}
     assert set(convex) == {"SEN-ME-D", "CONTROL-HOUSE-D"}  # toss-up and control
     assert set(value) == {"SEN-ME-D"}  # control fair 0.88 is outside the value band
-    assert convex["SEN-ME-D"].quantity == SG.CONVEX_QTY and convex["SEN-ME-D"].action == "buy"
+    # sized from the sleeve: Kelly (0.55 - 0.50) / (1 - 0.50) = 0.10, x kelly_fraction, x sleeve 15% of the
+    # bankroll, in shares at the 0.50 ask (the two orders together stay well inside the sleeve)
+    sleeve = c.sleeve_frac * cfg.bankroll_start
+    expected = int(0.10 * cfg.convex_sleeve.kelly_fraction * sleeve / 0.50 + 1e-9)
+    assert convex["SEN-ME-D"].quantity == expected and convex["SEN-ME-D"].action == "buy"
     assert convex["CONTROL-HOUSE-D"].price == pytest.approx(0.80)  # capped at the ask
     _assert_never_crosses(out, c.markets)
     # sleeve closed -> no convex orders

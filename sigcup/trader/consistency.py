@@ -15,9 +15,16 @@ Notes
   least one leg resolves YES (exhaustive). Both are gated on ``exclusive and exhaustive`` from the
   relationships API (never from titles): fusion tickets (RI), independents (NE/MT Senate, RI Gov) and
   December runoffs (GA) all break one of the two.
+* ``race_yes_sum`` needs *every* leg of the race (``race.markets``) open and quoted: buying YES on a
+  subset of an exhaustive set is not an arbitrage (the missing leg can win). ``race_no_sum`` over the
+  open legs is safe (selling YES on a subset of an exclusive set still pays at most one leg).
+* Legs are priced against the *outside* book (``outside_view``): our own resting orders (the ACKED
+  intents in ``MarketView.open_orders``) are removed from the top of book, falling back to the next
+  level of the cached depth. An opportunity whose leg would hit a level at or behind one of our own
+  resting orders on that side is skipped: the exchange would match our own order first (self-trade).
 * ``max_sets`` is bounded by the displayed size at the best level of every leg (top-of-book size, else
-  the cached depth). A leg with unknown size bounds the set at zero (no opportunity) because an
-  unfilled leg is a directional position, not an arbitrage.
+  the cached depth), net of our own orders. A leg with unknown size bounds the set at zero (no
+  opportunity) because an unfilled leg is a directional position, not an arbitrage.
 * Legs share a ``group_id`` (placed atomically by the OMS), carry ``take=True`` and priority 0.
 * ``control``: the control market's bid/ask is compared with the Frechet bounds implied by the seat
   markets' fair values (``simulate.frechet_bounds``), only when every seat race of the chamber is
@@ -28,11 +35,13 @@ Notes
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from sigcup.common.ids import new_idempotency_key
 from sigcup.common.log import get_logger
 from sigcup.db.models import Strategy
 from sigcup.settings import StrategyConfig
-from sigcup.sig.schemas import round_tick
+from sigcup.sig.schemas import TICK, Level, OrderBook, round_tick
 from sigcup.trader import simulate as _sim
 from sigcup.trader.fairvalue import control_chamber
 from sigcup.trader.types import (
@@ -44,7 +53,16 @@ from sigcup.trader.types import (
     TraderContext,
 )
 
-__all__ = ["control_checks", "displayed_size", "exclusivity_ok", "race_legs", "scan"]
+__all__ = [
+    "control_checks",
+    "displayed_size",
+    "exclusivity_ok",
+    "outside_view",
+    "own_levels",
+    "race_legs",
+    "scan",
+    "self_trade_risk",
+]
 
 log = get_logger(__name__)
 
@@ -97,6 +115,103 @@ def displayed_size(v: MarketView, side: str) -> int:
     return 0
 
 
+def _tick_key(price: float) -> int:
+    return int(round(float(price) / TICK))
+
+
+def own_levels(v: MarketView) -> tuple[dict[int, int], dict[int, int]]:
+    """Our resting quantity per YES-book level (keyed by tick index): ``(bids, asks)``.
+
+    Built from the ACKED intents in ``v.open_orders`` (remaining = quantity - filled). A NO order rests on
+    the same YES book at ``1 - price``: buy NO == sell YES (ask side), sell NO == buy YES (bid side).
+    """
+    bids: dict[int, int] = {}
+    asks: dict[int, int] = {}
+    for i in v.open_orders or []:
+        try:
+            price = float(i.price)
+            qty = int(getattr(i, "quantity", 0) or 0) - int(getattr(i, "filled_qty", 0) or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        side = str(getattr(i, "side", "yes") or "yes").lower()
+        action = str(getattr(i, "action", "buy") or "buy").lower()
+        yes_px = price if side == "yes" else 1.0 - price
+        levels = bids if (side == "yes") == (action == "buy") else asks
+        k = _tick_key(yes_px)
+        levels[k] = levels.get(k, 0) + qty
+    return bids, asks
+
+
+def _outside_level(
+    price: float | None, size: int | None, levels: list[Level], own: dict[int, int], bid_side: bool
+) -> tuple[float | None, int | None]:
+    """Best price/size on one side once our own quantity is removed (next cached level when the best
+    level is, or may be, entirely ours)."""
+    if price is None:
+        return None, None
+    mine = own.get(_tick_key(price), 0)
+    if mine <= 0:
+        return price, size
+    level_qty = size
+    if level_qty is None:
+        level_qty = next((int(lv.quantity) for lv in levels if abs(lv.price - price) < _EPS), None)
+    if level_qty is not None and level_qty - mine > 0:
+        return price, level_qty - mine
+    if bid_side:
+        deeper = sorted((lv for lv in levels if lv.price < price - _EPS), key=lambda lv: -lv.price)
+    else:
+        deeper = sorted((lv for lv in levels if lv.price > price + _EPS), key=lambda lv: lv.price)
+    for lv in deeper:
+        rest = int(lv.quantity) - own.get(_tick_key(lv.price), 0)
+        if rest > 0:
+            return lv.price, rest
+    return None, None
+
+
+def _strip_book(book: OrderBook | None, own_bids: dict[int, int], own_asks: dict[int, int]) -> OrderBook | None:
+    if book is None:
+        return None
+
+    def strip(levels: list[Level], own: dict[int, int]) -> list[Level]:
+        out = []
+        for lv in levels:
+            q = int(lv.quantity) - own.get(_tick_key(lv.price), 0)
+            if q > 0:
+                out.append(Level(price=lv.price, quantity=q))
+        return out
+
+    return OrderBook(exchange_id=book.exchange_id, bids=strip(book.bids, own_bids), asks=strip(book.asks, own_asks), ts=book.ts)
+
+
+def outside_view(v: MarketView) -> MarketView:
+    """A copy of ``v`` whose top of book (and cached depth) excludes our own resting orders.
+
+    Edges, mids and arbitrage sums are measured against what *other* participants show; a resting order
+    of ours must not move the mid it is measured against (or the order cancels itself on the next cycle).
+    ``v`` itself is returned when we have nothing resting on the market.
+    """
+    own_bids, own_asks = own_levels(v)
+    if not own_bids and not own_asks:
+        return v
+    book = v.book
+    bid, bid_size = _outside_level(v.bid, v.bid_size, list(book.bids) if book else [], own_bids, bid_side=True)
+    ask, ask_size = _outside_level(v.ask, v.ask_size, list(book.asks) if book else [], own_asks, bid_side=False)
+    return replace(v, bid=bid, ask=ask, bid_size=bid_size, ask_size=ask_size, book=_strip_book(book, own_bids, own_asks))
+
+
+def self_trade_risk(v: MarketView, hit: str, price: float | None) -> bool:
+    """True when an order hitting ``hit`` ('bid' | 'ask') of ``v`` at YES price ``price`` could match one
+    of our own resting orders (ours at that price or better on that side)."""
+    if price is None:
+        return False
+    own_bids, own_asks = own_levels(v)
+    if hit == "bid":
+        return any(k * TICK >= float(price) - _EPS for k in own_bids)
+    return any(k * TICK <= float(price) + _EPS for k in own_asks)
+
+
 def _group_id(kind: str, race_id: str) -> str:
     return f"{kind}:{race_id}:{new_idempotency_key()[:8]}"[:32]
 
@@ -108,6 +223,9 @@ def _race_no_sum(race: RaceInfo, legs: list[MarketView], cfg: StrategyConfig) ->
     total = sum(float(v.bid) for v in legs)  # type: ignore[arg-type]
     profit = total - 1.0
     if profit <= cfg.arb.min_profit + _EPS:
+        return None
+    if any(self_trade_risk(v, "bid", v.bid) for v in legs):
+        log.debug("race_no_sum %s skipped: a leg would hit our own resting bid", race.race_id)
         return None
     max_sets = min(displayed_size(v, "bid") for v in legs)
     if max_sets <= 0:
@@ -138,6 +256,9 @@ def _race_yes_sum(race: RaceInfo, legs: list[MarketView], cfg: StrategyConfig) -
     total = sum(float(v.ask) for v in legs)  # type: ignore[arg-type]
     profit = 1.0 - total
     if profit <= cfg.arb.min_profit + _EPS:
+        return None
+    if any(self_trade_risk(v, "ask", v.ask) for v in legs):
+        log.debug("race_yes_sum %s skipped: a leg would lift our own resting ask", race.race_id)
         return None
     max_sets = min(displayed_size(v, "ask") for v in legs)
     if max_sets <= 0:
@@ -270,12 +391,15 @@ def scan(ctx: TraderContext) -> list[ArbOpportunity]:
         race = ctx.races[race_id]
         if race.chamber == "control":
             continue
-        legs = race_legs(ctx, race)
+        legs = [outside_view(v) for v in race_legs(ctx, race)]
         if len(legs) < 2 or len(legs) > cfg.arb.max_legs:
             continue
         if not exclusivity_ok(race, cfg):
             continue
-        for opp in (_race_no_sum(race, legs, cfg), _race_yes_sum(race, legs, cfg)):
+        # buying YES on a subset of the legs is not covered: every leg must be present and open
+        complete = bool(race.markets) and len(legs) == len(race.markets)
+        yes_sum = _race_yes_sum(race, legs, cfg) if complete else None
+        for opp in (_race_no_sum(race, legs, cfg), yes_sum):
             if opp is not None:
                 log.info("consistency: %s %s profit=%.3f sets=%d", opp.kind, race_id, opp.profit_per_set, opp.max_sets)
                 out.append(opp)

@@ -7,7 +7,8 @@ Model modules are imported lazily by the exact contract names in ``sigcup.trader
 is wrapped: a missing or failing *required* step (fair value, signals) logs and skips the cycle, an
 optional step (consistency, endgame, election night) falls back to a safe default. ``run(once=True)``
 performs a single refresh / model cycle / reconcile / leaderboard pass and returns its result (canary,
-tests).
+tests). ``run_forever`` retries a failing startup (503 / 429 / timeouts) with backoff while the heartbeat and
+kill-watch run, and after a kill it stops only once the OMS confirmed that no order is left open.
 """
 
 from __future__ import annotations
@@ -41,7 +42,10 @@ from sigcup.trader.types import ActiveEvent, DesiredOrder, FairValue, RaceInfo, 
 log = get_logger(__name__)
 
 PROCESS = "trader"
-KV_DAY_START = "trader.day_start"
+KV_DAY_START = "trader.day_start"  # live; paper keeps its own baseline under KV_DAY_START_PAPER
+KV_DAY_START_PAPER = "trader.day_start:paper"
+STARTUP_RETRY_S = 5.0
+STARTUP_RETRY_MAX_S = 60.0
 BULK_CHUNK = 100  # /exchanges/prices accepts <= 100 ids per read
 DEPTH_PER_PASS = 4  # depth reads per bulk pass (bounded: reads are shared with everything else)
 
@@ -139,6 +143,8 @@ class Trader:
         self._realtime_task: asyncio.Task | None = None
         self._realtime_feed: Any = None
         self._resync_requested = False
+        self.startup_retry_s = STARTUP_RETRY_S
+        self._stop_when_flat = False  # this process fired the kill: stop once it is confirmed
 
     # -- books ---------------------------------------------------------------------------------
     async def refresh_books(self) -> list[str]:
@@ -241,10 +247,11 @@ class Trader:
 
     def _daily_pnl(self, s: Any, now: datetime, equity: float) -> float:
         day = now.strftime("%Y-%m-%d")
-        start = kv_get(s, KV_DAY_START) or {}
+        key = KV_DAY_START if self.live else KV_DAY_START_PAPER  # a paper book never sets the live baseline
+        start = kv_get(s, key) or {}
         if not isinstance(start, dict) or start.get("day") != day:
             start = {"day": day, "equity": equity}
-            kv_set(s, KV_DAY_START, start)
+            kv_set(s, key, start)
         return equity - float(start.get("equity", equity))
 
     def build_context(self) -> TraderContext:
@@ -312,7 +319,7 @@ class Trader:
         if reason:
             await self.oms.kill(reason)
             res.skipped = res.killed = reason
-            self.stop.set()
+            self._stop_after_kill()
             return res
         cons = _module("sigcup.trader.consistency")
         arbs: list = []
@@ -340,7 +347,7 @@ class Trader:
         res.sync = await self.oms.sync(accepted)
         if res.sync.killed:
             res.killed = res.sync.killed
-            self.stop.set()
+            self._stop_after_kill()
         log.info(
             "cycle: fair=%d arbs=%d desired=%d accepted=%d placed=%d cancelled=%d kept=%d deferred=%d skipped=%d%s",
             res.fair, res.arbs, res.desired, res.accepted, len(res.sync.placed), len(res.sync.cancelled),
@@ -385,9 +392,21 @@ class Trader:
         with dbengine.session() as s:
             heartbeat(s, PROCESS, status, detail)
 
+    def _stop_after_kill(self) -> None:
+        """Stop once the kill is confirmed (no open orders); until then keep running so watch_kill retries."""
+        self._stop_when_flat = True
+        if self.oms.kill_confirmed:
+            self.stop.set()
+        else:
+            log.critical("kill not confirmed yet: staying up to retry the cancel")
+
     async def watch_kill(self) -> None:
-        if self.sec.kill_path.exists() and self.oms.killed is None:
+        if self.oms.killed is None and self.sec.kill_path.exists():
             await self.oms.kill(f"kill file present: {self.sec.kill_path}")
+            self._stop_when_flat = True
+        elif self.oms.killed is not None and not self.oms.kill_confirmed:
+            await self.oms.confirm_kill()
+        if self._stop_when_flat and self.oms.kill_confirmed:
             self.stop.set()
 
     # -- entry points --------------------------------------------------------------------------
@@ -401,6 +420,27 @@ class Trader:
         await self.heartbeat()
         return res
 
+    async def _startup(self) -> bool:
+        """Startup reconcile + first book refresh, retried with backoff: a 503 / 429 / timeout at startup must
+        not crash the process (pm2 gives up after a few fast restarts). False if stopped meanwhile."""
+        delay = self.startup_retry_s
+        reconciled = False
+        while not self.stop.is_set():
+            try:
+                if not reconciled:
+                    await self.oms.startup_reconcile()
+                    reconciled = True
+                await self.refresh_books()
+                return True
+            except Exception as e:  # noqa: BLE001
+                log.warning("startup failed (%s: %s); retrying in %.0f s", type(e).__name__, e, delay)
+            try:
+                await asyncio.wait_for(self.stop.wait(), timeout=delay)
+            except TimeoutError:
+                pass
+            delay = min(delay * 2, STARTUP_RETRY_MAX_S)
+        return False
+
     async def run_forever(self) -> None:
         loop = asyncio.get_running_loop()
         for sig_ in (signal.SIGTERM, signal.SIGINT):
@@ -408,20 +448,21 @@ class Trader:
                 loop.add_signal_handler(sig_, self.stop.set)
             except (NotImplementedError, RuntimeError, ValueError):
                 pass
-        await self.oms.startup_reconcile()
-        await self.refresh_books()
-        self.start_realtime()
         c = self.cfg.cadence
         tasks = [
-            asyncio.create_task(every(c.bulk_prices_s, self.refresh_books, name="books", run_immediately=False, stop=self.stop)),
-            asyncio.create_task(every(c.model_s, self.model_cycle, name="model", stop=self.stop)),
-            asyncio.create_task(every(c.reconcile_s, self.reconcile, name="reconcile", stop=self.stop)),
-            asyncio.create_task(every(c.leaderboard_s, self.leaderboard, name="leaderboard", stop=self.stop)),
             asyncio.create_task(every(15, self.heartbeat, name="heartbeat", jitter=0.0, stop=self.stop)),
             asyncio.create_task(every(5, self.watch_kill, name="kill-watch", jitter=0.0, stop=self.stop)),
         ]
         try:
-            await self.stop.wait()
+            if await self._startup():
+                self.start_realtime()
+                tasks += [
+                    asyncio.create_task(every(c.bulk_prices_s, self.refresh_books, name="books", run_immediately=False, stop=self.stop)),
+                    asyncio.create_task(every(c.model_s, self.model_cycle, name="model", stop=self.stop)),
+                    asyncio.create_task(every(c.reconcile_s, self.reconcile, name="reconcile", stop=self.stop)),
+                    asyncio.create_task(every(c.leaderboard_s, self.leaderboard, name="leaderboard", stop=self.stop)),
+                ]
+                await self.stop.wait()
         finally:
             log.info("trader stopping")
             for t in tasks:
@@ -437,9 +478,12 @@ class Trader:
                         log.exception("realtime stop failed")
                 self._realtime_task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            if self.live and self.oms.killed is None:
+            if self.live:
                 try:
-                    await self.oms.cancel_all()
+                    if self.oms.killed is None:
+                        await self.oms.cancel_all()
+                    elif not self.oms.kill_confirmed:
+                        await self.oms.confirm_kill()
                 except Exception:  # noqa: BLE001
                     log.exception("cancel_all on shutdown failed")
             try:
@@ -474,7 +518,12 @@ def build_trader(
                     source = build_live_adapter(sec, cfg, budget, read_only=True)
                 except Exception as e:  # noqa: BLE001
                     log.warning("paper: no live market-data source (%s); using DB quotes", e)
-            adapter = PaperAdapter(cfg, source=source, budget=budget, clock=clock)
+            paper_adapter = PaperAdapter(cfg, source=source, budget=budget, clock=clock)
+            try:
+                paper_adapter.resume_from_ledger()  # a restart continues the same paper book
+            except Exception as e:  # noqa: BLE001
+                log.warning("paper: cannot resume from the fills ledger (%s); starting a fresh book", e)
+            adapter = paper_adapter
     elif live and not sec.sig_api_key:
         raise RuntimeError("LIVE=1 but SIG_API_KEY is empty: refusing to start the live trader")
     book = BookState(cfg)

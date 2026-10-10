@@ -31,7 +31,9 @@ Chamber control (documented assumptions, exposed as constants)
 * House: the 46 district markets cover the competitive seats. ``HOUSE_D_SEATS_NOT_IN_MARKETS = 203``
   Democratic seats are treated as fixed (215 D seats after 2024 minus the 12 D-held districts among the
   46 market districts). Revise against the live market list and any mid-decade redistricting; the
-  constant can be overridden per call (``house_baseline``). Majority is ``HOUSE_MAJORITY = 218``.
+  constant can be overridden per call (``house_baseline``). Majority is ``HOUSE_MAJORITY = 218``. A
+  D-held market district that is in the race universe (``meta``, ``incumbent_party == 'D'``) but has no
+  fair value this cycle is assumed held, as on the Senate side, rather than counted as a loss.
 """
 
 from __future__ import annotations
@@ -136,10 +138,16 @@ def _normalised(legs: Mapping[str, float]) -> dict[str, float]:
     return {p: v / total for p, v in vals.items()}
 
 
-def control_requirements(meta: Mapping[str, RaceInfo], house_baseline: int | None = None) -> dict[str, tuple[int, list[str]]]:
+def control_requirements(
+    meta: Mapping[str, RaceInfo],
+    house_baseline: int | None = None,
+    universe: Mapping[str, RaceInfo] | None = None,
+) -> dict[str, tuple[int, list[str]]]:
     """Democratic wins needed among the simulated races per chamber, with the race ids involved.
 
-    Senate: ``51 - 34 - (D-held seats up without a market)``. House: ``218 - baseline``.
+    Senate: ``51 - 34 - (D-held seats up without a market)``. House: ``218 - baseline - (D-held districts
+    of ``universe`` that are not in ``meta``)``: ``universe`` is the full race universe when ``meta`` only
+    holds the races being simulated, so a D-held district without a fair value counts as held.
     """
     senate = sorted(rid for rid, r in meta.items() if r.chamber == "senate")
     house = sorted(rid for rid, r in meta.items() if r.chamber == "house")
@@ -150,7 +158,15 @@ def control_requirements(meta: Mapping[str, RaceInfo], house_baseline: int | Non
         out["senate"] = (SENATE_MAJORITY - SENATE_D_NOT_UP - holds, senate)
     if house:
         base = HOUSE_D_SEATS_NOT_IN_MARKETS if house_baseline is None else int(house_baseline)
-        out["house"] = (HOUSE_MAJORITY - base, house)
+        present = set(house)
+        held = 0
+        if universe is not None:
+            held = sum(
+                1
+                for rid, r in universe.items()
+                if r.chamber == "house" and rid not in present and r.incumbent_party and _role(r.incumbent_party) == "D"
+            )
+        out["house"] = (HOUSE_MAJORITY - base - held, house)
     return out
 
 
@@ -275,7 +291,7 @@ def simulate(
         elif chamber in d_wins:
             d_wins[chamber].append(np.zeros(n, dtype=bool))
 
-    reqs = control_requirements(sim_meta, house_baseline)
+    reqs = control_requirements(sim_meta, house_baseline, universe=meta)
     seats: dict[str, np.ndarray] = {}
     control: dict[str, float] = {}
     if reqs.get("senate"):
