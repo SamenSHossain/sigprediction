@@ -55,7 +55,7 @@ def seed(s) -> None:
     s.add(intent("i-unc", "tx-r", "theta", IntentState.UNCERTAIN.value))
     s.add(intent("i-done", "tx-r", "theta", IntentState.FILLED.value))
     s.add(Position(exchange_id="tx-d", quantity=100, avg_price=0.60, mark=0.70, updated_at=NOW))
-    s.add(Position(exchange_id="tx-r", quantity=-50, avg_price=0.75, mark=0.30, updated_at=NOW))
+    s.add(Position(exchange_id="tx-r", quantity=-50, avg_price=0.25, mark=0.30, updated_at=NOW))  # NO position: NO price paid (f3)
     s.add(Position(exchange_id="ga-d", quantity=0, avg_price=None, mark=None, updated_at=NOW))
     s.add(LeaderboardSnap(ts=NOW - timedelta(days=2), rank=12, our_total=100_200, top_totals=[120_000, 115_000, 110_000], member_count=100))
     s.add(LeaderboardSnap(ts=NOW - timedelta(hours=25), rank=10, our_total=100_900, top_totals=[121_000, 116_000, 111_000], member_count=100))
@@ -95,6 +95,9 @@ def test_status_sections(db, tmp_path):
     assert abs(ex["by_state"]["TX"]["value"] - 55.0) < 1e-9 and abs(ex["by_state"]["TX"]["gross"] - 85.0) < 1e-9
     assert abs(ex["net_dem_equivalent"] - 85.0) < 1e-9
     assert ex["positions"][0]["exchange_id"] == "tx-d" and abs(ex["positions"][0]["unrealised"] - 10.0) < 1e-9
+    # 50 NO bought @0.25 (YES 0.75), YES now 0.30: +22.5, the same figure as the P&L ledger
+    assert ex["positions"][1]["exchange_id"] == "tx-r" and abs(ex["positions"][1]["unrealised"] - 22.5) < 1e-9
+    assert abs(ex["by_state"]["TX"]["at_risk"] - (100 * 0.70 + 50 * 0.70)) < 1e-9
     assert d["leaderboard"]["rank"] == 7 and d["leaderboard"]["member_count"] == 100
     assert d["kill"]["kill_file_present"] is False and d["kill"]["kv_flag"] is None
     assert any("feeds" in a_ for a_ in d["alerts"]) and any("UNCERTAIN" in a_ for a_ in d["alerts"])
@@ -162,7 +165,11 @@ def test_daily_sections(db, tmp_path):
     assert abs(cal["by_strategy"]["value"]["mean_edge"] - 0.10) < 1e-9
     assert abs(cal["by_strategy"]["theta"]["mean_edge"] - 0.04) < 1e-9  # edge null -> fair - price
     assert cal["fair_vs_ref"]["n"] == 2 and abs(cal["fair_vs_ref"]["mean_gap"] - ((0.70 - 0.72) + (0.92 - 0.95)) / 2) < 1e-9
-    assert "0.6-0.7" in cal["buckets"] and cal["buckets"]["0.6-0.7"]["n"] == 0 or "0.7-0.8" in cal["buckets"]
+    assert cal["source"] == "signals"
+    assert set(cal["buckets"]) == {"0.7-0.8", "0.9-1.0"}
+    b7, b9 = cal["buckets"]["0.7-0.8"], cal["buckets"]["0.9-1.0"]
+    assert b7["n"] == 1 and abs(b7["mean_fair"] - 0.70) < 1e-9 and abs(b7["mean_price"] - 0.60) < 1e-9
+    assert b9["n"] == 1 and abs(b9["mean_fair"] - 0.92) < 1e-9 and abs(b9["mean_price"] - 0.88) < 1e-9
     sr = d["sig_vs_ref"]
     assert sr["n"] == 2
     gaps = {g["exchange_id"]: g for g in sr["largest"]}

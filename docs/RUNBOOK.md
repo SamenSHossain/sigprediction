@@ -8,7 +8,7 @@ Three long-running processes share one SQLite database (WAL mode):
 
 | pm2 app    | command                           | key used        | what it does |
 |------------|-----------------------------------|-----------------|--------------|
-| `trader`   | `python -m sigcup.cli trade`      | `SIG_API_KEY` (trade) | the ONLY process that talks to the exchange with a write-capable key: books, fair values, signals, risk, OMS, reconciliation, kill switch |
+| `trader`   | `python -m sigcup.cli trade`      | `SIG_API_KEY` (trade) | the ONLY process that talks to the exchange with a write-capable key: books, fair values, signals, risk, OMS, reconciliation, kill switch. Live when `.env` has `LIVE=1` (+ key), paper otherwise |
 | `feeds`    | `python -m sigcup.cli feeds`      | none (public APIs) + `SIG_READ_KEY` is *not* needed | Kalshi/Polymarket reference prices, ratings/polls, GDELT/RSS news, Bluesky/X/YouTube posts, stance classification, features, events |
 | `reporter` | `python -m sigcup.cli report loop`| none (database only) | hourly status line + CLV, daily report at 12:00 UTC, heartbeat |
 
@@ -30,8 +30,8 @@ cp .env.example .env && chmod 600 .env      # fill in keys (section 2)
 npm install -g pm2
 ```
 
-`.venv/bin/sigcup` and `.venv/bin/python -m sigcup.cli` are the same thing; the pm2 file uses the
-latter so it never depends on `PATH`.
+`.venv/bin/sigcup` and `.venv/bin/python -m sigcup.cli` are the same thing; the pm2 file runs them
+by absolute path so it never depends on `PATH`.
 
 Run the tests once on the machine that will trade (no network is needed):
 
@@ -65,7 +65,7 @@ Run the tests once on the machine that will trade (no network is needed):
 | `SIG_API_KEY` | **trader**, `canary --live`, `bootstrap --probe-writes`, `kill --cancel-now` | trade-scope key. Never put it on another machine. |
 | `SIG_READ_KEY` | paper trader (market data), bootstrap (read calls) | read-scope key; optional |
 | `SIG_TOURNAMENT_SLUG` | trader, bootstrap | e.g. `2026-midterm-elections`; `sigcup bootstrap` reports the slugs it sees |
-| `LIVE` | everything that can send an order | `1` = real orders allowed; anything else = paper. **Both `LIVE=1` and `SIG_API_KEY` are required** for `trade --live`, `canary --live`, `bootstrap --probe-writes`, `kill --cancel-now`. |
+| `LIVE` | everything that can send an order | `1` (pydantic also reads `true`, `yes`, `on`, `t`, `y` as true) = real orders allowed, and plain `sigcup trade` (what pm2 runs) trades live; `0` or unset (`false`, `no`, `off`) = paper. Any other value (`LIVE=live`, `LIVE=2`) is a configuration error that stops every command except `sigcup kill`, which then treats it as 0. **Both `LIVE=1` and `SIG_API_KEY` are required** for live `trade`, `canary --live`, `bootstrap --probe-writes`, `kill --cancel-now`. |
 | `KILL_FILE` | trader, `sigcup kill` | default `data/KILL` |
 | `DSN` / `DATA_DIR` | all | database and data directory (`sqlite:///data/sigcup.db`, `data`) |
 | `ANTHROPIC_API_KEY` | feeds (stance classification) | without it the `nlp_stance` collector is skipped (features/lead-lag stay empty) |
@@ -90,15 +90,16 @@ Secrets are never logged; the client never logs headers. Keep `.env` at mode 600
 graph is empty (if it is, **no Dutch book is riskless**: the `arb` strategy stays idle because it
 requires API-verified `mutually_exclusive` + `isExhaustive`), and the batch-write-count probe.
 The write probe is only described unless you pass `--probe-writes` (`LIVE=1` + trade key: it places
-and cancels two 1-share bids at 0.005).
+and cancels two 1-share bids at 0.005). The same guard applies when it is passed through
+(`sigcup bootstrap -- --probe-writes`).
 
 `config/races.yaml` is hand-editable; bootstrap overwrites only exchange-owned fields.
 
 ## 4. pm2 operations
 
 ```bash
-pm2 start ecosystem.config.js        # trader (paper unless LIVE=1), feeds, reporter
-pm2 status
+pm2 start ecosystem.config.js        # trader (live when LIVE=1 + key, else paper), feeds, reporter
+pm2 status                           # trader, feeds and reporter must all show "online"
 pm2 logs trader --lines 100          # also: feeds, reporter; files live in logs/
 pm2 restart trader                   # on SIGINT/SIGTERM the LIVE trader cancels its resting orders first
 pm2 stop trader                      # stops quoting; resting orders expire within risk.order_expiry_s (15 min)
@@ -111,6 +112,11 @@ The ecosystem file sets `max_restarts: 20`, `restart_delay: 5000` and `kill_time
 purpose: a crash loop must not burn the write budget with cancel-all / re-lay cycles, and the trader
 needs a few seconds to cancel quotes on shutdown. If a process is flapping, `pm2 stop` it and read
 the log before restarting.
+
+Check `pm2 status` once on the trading host after the first start: pm2 resolves each app's `script`
+as a file, so an entry such as `script: "-m"` fails with `Script not found: …/-m` and nothing runs.
+The apps must point `script` at `.venv/bin/sigcup` (args `trade` / `feeds` / `report loop`) or at
+`.venv/bin/python` (args `-m sigcup.cli …`), with `interpreter: "none"`.
 
 Changing `.env` or `config/settings.yaml` requires `pm2 restart <app>`.
 
@@ -126,35 +132,42 @@ Changing `.env` or `config/settings.yaml` requires `pm2 restart <app>`.
    network (`sigcup feeds --once --only nlp_features --only events`, `sigcup report loop --once` and
    `sigcup status` work the same way). Run `python scripts/seed_paper.py --purge` before the real
    `sigcup bootstrap` so the synthetic markets do not linger.
-2. **Canary (one order, 10 shares).**
+2. **Canary (one order, 10 shares).** `.env` keeps `LIVE=0` (the pm2 trader stays in paper) and has
+   `SIG_API_KEY`; `LIVE=1` is set only in the shell for these two commands. Do not put `LIVE=1` in
+   `.env` yet: any pm2 restart of the trader would then come up live at full caps.
    ```bash
-   # in .env: LIVE=1, SIG_API_KEY=...   (pm2 trader still stopped or in paper)
-   .venv/bin/sigcup canary --live                 # joins the best bid, waits 30 s, cancels
-   .venv/bin/sigcup canary --live --take          # crosses the spread so it fills (also completes enrolment)
+   LIVE=1 .venv/bin/sigcup canary --live          # joins the best bid, waits 30 s, cancels
+   LIVE=1 .venv/bin/sigcup canary --live --take   # crosses the spread so it fills (also completes enrolment)
    ```
    The table must end with `verdict OK` and a known final state (`filled`, `cancelled`,
    `partial-cancelled`, `expired`). `uncertain` means the exchange answered 502
    `ORDER_STATUS_UNKNOWN` / timed out: do **not** retry blindly; check the web app, then
    `sigcup status` (the intent is stored as UNCERTAIN and the trader reconciles it at startup).
-   A canary never bids above 0.50 unless `--take` is given, so the worst case is 5 SUSQies.
-3. **Forced 429 recovery (optional but recommended).** Run `sigcup canary --live` four times inside a
-   minute while the trader is live: the limiter must queue, not 429. If a 429 does appear, the log
-   shows `RateLimited` and every write is frozen for `Retry-After` (60 s) — that is the designed
-   behaviour, verify nothing else happened.
+   Without `--take` a canary never bids above 0.50, so at the default `--qty 10` the worst case is 5
+   SUSQies; with `--take` it buys at the ask (up to ~10 SUSQies at qty 10; `--qty` is capped at 100).
+3. **Rate limits: no forced-429 test.** The budget (100 reads + 30 writes per minute) is counted per
+   account across every key and process, while each process has its own limiter: canaries started
+   next to the trader do not queue behind it, they only add to the account's usage. Run canaries
+   only while the pm2 trader is stopped or in paper (one run uses about 16 reads and 2 writes).
+   429 / `Retry-After` handling is covered by the unit tests (`tests/test_sig_client.py`, the OMS
+   tests). In production a 429 shows as `RateLimited` in the log and freezes every write for
+   `Retry-After` (60 s): designed behaviour, do not restart.
 4. **Small caps (one hour).** In `config/settings.yaml` set `risk.per_race_cap_frac: 0.005` and
-   `risk.per_state_cap_frac: 0.02`, then `pm2 restart trader` with `LIVE=1`. Watch `pm2 logs
-   trader` for `cycle:` lines (placed/cancelled counts), `sigcup status` for open orders and the
-   reservation ≤ cash invariant, and `sigcup report daily` for fills tagged by strategy.
+   `risk.per_state_cap_frac: 0.02`, then set `LIVE=1` in `.env` and `pm2 restart trader`. The log
+   must show `trader: mode=LIVE` and `sigcup status` the trader heartbeat `live` (a `paper` heartbeat
+   while `LIVE=1` is an alert). Watch `pm2 logs trader` for `cycle:` lines (placed/cancelled counts),
+   `sigcup status` for open orders and the reservation ≤ cash invariant, and `sigcup report daily`
+   for fills tagged by strategy.
 5. **Full caps.** Restore `0.03` / `0.08`, `pm2 restart trader`. Keep the daily checklist.
 
-Switching back to paper at any time: `LIVE=0` in `.env` + `pm2 restart trader`
-(`sigcup trade --paper` ignores `LIVE`).
+Switching back to paper at any time: `LIVE=0` in `.env` + `pm2 restart trader`.
+`sigcup trade` without a flag follows `LIVE`; `--paper` / `--live` override it for a manual run.
 
 ## 6. Daily checklist (5 minutes)
 
 ```bash
-.venv/bin/sigcup status              # exit code 1 means there are alerts: read them
-.venv/bin/sigcup report daily        # P&L by strategy, CLV, calibration, SIG-vs-ref gaps, rank history
+.venv/bin/sigcup status              # exit code 1 means there are alerts: read them (`--json` always exits 0)
+.venv/bin/sigcup report daily        # P&L and CLV by strategy and mode, calibration, SIG-vs-ref gaps, rank history
 .venv/bin/sigcup report leadlag      # only matters once features exist (>= 1 week of posts)
 pm2 logs trader --lines 50 --nostream
 ```
@@ -170,7 +183,8 @@ What to look at, in order:
    OMS keeps an internal reservation ≤ cash and sheds buys if it is violated (`reconcile repair` lines).
 4. **Open orders**: count and notional by strategy; `uncertain > 0` must be 0 after the next
    reconcile (60 s). `arb` orders only exist if the relationships probe found exclusive groups.
-5. **CLV**: `clv24h` per strategy should be ≥ 0 on average; a persistently negative `theta` CLV
+5. **CLV**: judge the `live` rows (paper rows are listed separately and never pooled with them).
+   `clv24h` per strategy should be ≥ 0 on average; a persistently negative `theta` CLV
    means we are buying favourites too high (raise `theta.min_yield`); a negative `value` CLV means
    the fair value is worse than the market (check `sig_vs_ref` and the ref feed heartbeat).
 6. **P&L**: realised + unrealised by strategy and by mode (paper/live are never mixed). Judge
@@ -180,14 +194,17 @@ What to look at, in order:
 ## 7. Kill switch
 
 ```bash
-.venv/bin/sigcup kill                 # touch data/KILL and print what happens next
+.venv/bin/sigcup kill                 # touch data/KILL, set the database kill flags, print what happens next
 .venv/bin/sigcup kill --cancel-now    # also cancel-all immediately through a direct client (LIVE=1 + key)
 .venv/bin/sigcup kill --clear         # remove the file + clear the DB flag; then: pm2 restart trader
 ```
 
-What the trader does when the file appears (checked every 5 s and on every cycle): cancel-all,
-write a `killed` flag to the KV table, log `KILL SWITCH`, exit. pm2 restarts it but it refuses to
-trade while the file or the flag exists. The same path fires automatically on the daily loss limit
+`sigcup kill` sets the database kill flags (`killed`, `killed:paper` in the KV table) at once, not
+only the file. What the trader does when the file appears (checked every 5 s and on every cycle):
+cancel-all, log `KILL SWITCH`, exit once nothing is open. Because the flag is already set, pm2's
+restart (or any later start) begins killed: its startup reconcile cancels anything open and re-sends
+nothing, not even an `UNCERTAIN` order left behind by a crash. It refuses to trade while the file or
+the flag exists (a trader started while the file exists sets the flag itself). The same path fires automatically on the daily loss limit
 (`risk.daily_loss_limit_frac`, 5%). `kill` warns when the trader heartbeat is stale, because then
 nothing is running to cancel orders: use `--cancel-now` or cancel in the web app.
 
@@ -253,7 +270,9 @@ Checklist for the night:
 | `tournamentId required` / orders landing on the public book | `SIG_TOURNAMENT_SLUG` empty or wrong | run `sigcup bootstrap -- --dry-run`, set the slug, restart |
 | `kill file present` on every start | you killed it | `sigcup kill --clear` after investigating |
 | `report leadlag` prints `(no feature rows yet)` | no stance features (no `ANTHROPIC_API_KEY`, or < 3 baseline days) | expected for the first days |
-| `sigcup status` exit code 1 | alerts present | read them; exit 0 means clean |
+| `sigcup status` exit code 1 | alerts present | read them; exit 0 means clean (`status --json` always exits 0: read its `alerts` list) |
+| alert `LIVE=1 but the trader is running in paper mode` | the trader was started with `--paper` | `pm2 restart trader` (pm2 runs plain `trade`, which follows `LIVE`) |
+| every command fails with a pydantic `ValidationError` on `live` | `LIVE` has a value that is not a boolean (`LIVE=live`) | set `LIVE=1` or `LIVE=0`; `sigcup kill` still works meanwhile |
 | `universe` empty | bootstrap not run | `sigcup bootstrap`; `--source yaml` shows the seed |
 | trader starts but `fair=0` every cycle | no reference prices / ratings yet | check `feeds` heartbeat and `data/` for `ref_prices` rows (`sigcup db stats`) |
 | `database is locked` | another writer held SQLite > 30 s | WAL + busy_timeout handle normal contention; stop stray `sigcup` shells |

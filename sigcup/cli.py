@@ -5,10 +5,16 @@ The heavy entry points (trader, feeds, bootstrap script) are imported LAZILY ins
 ``sigcup --help`` works even while those modules are unfinished; a command whose target is missing
 prints a clear error and exits with code 2.
 
-Live-trading guard (one rule everywhere): anything that can send a real order (``trade --live``,
-``canary --live``, ``bootstrap --probe-writes``, ``kill --cancel-now``) requires ``LIVE=1`` (environment
-or .env) AND a non-empty ``SIG_API_KEY``; otherwise the command refuses and exits non-zero. Paper mode
-is the default for every command.
+Live-trading guard (one rule everywhere): anything that can send a real order (``trade`` in live mode,
+``canary --live``, ``bootstrap --probe-writes`` including when passed through ``--``, ``kill --cancel-now``)
+requires ``LIVE=1`` (environment or .env) AND a non-empty ``SIG_API_KEY``; otherwise the command refuses
+and exits non-zero. ``trade`` without a flag follows ``LIVE`` (that is what pm2 runs; ``--paper`` /
+``--live`` override it); every other command is paper unless asked.
+
+Kill switch: ``sigcup kill`` touches the kill file AND sets the database kill flags (``killed`` for the
+live trader, ``killed:paper`` for the paper one), so a trader that is (re)started afterwards begins
+killed: its startup reconcile cancels what is open and re-sends nothing. ``trade`` sets the same flag
+when it finds the kill file. ``kill --clear`` removes both.
 """
 
 from __future__ import annotations
@@ -48,7 +54,11 @@ app.add_typer(db_app, name="db")
 app.add_typer(report_app, name="report")
 
 EXIT_USAGE = 2
-CANARY_POLL_S = 2.0
+# the account shares 100 reads/min across every process: a 30 s canary polls ~7 times (2 reads each)
+CANARY_POLL_S = 5.0
+KV_KILLED = "killed"  # == sigcup.trader.oms.KV_KILLED (not imported: `kill` must work if the trader is broken)
+KV_KILLED_PAPER = "killed:paper"  # == sigcup.trader.oms.KV_KILLED_PAPER
+PROBE_WRITES = "--probe-writes"
 ONLY_OPTION = typer.Option(None, "--only", help="Collector name(s) to run (with --once).")
 
 
@@ -116,7 +126,43 @@ def live_allowed(sec: Secrets) -> tuple[bool, str]:
 def require_live(sec: Secrets, action: str) -> None:
     ok, why = live_allowed(sec)
     if not ok:
-        fail(f"refusing {action}: {why}. Paper mode needs no key and is the default.")
+        fail(f"refusing {action}: {why}. Paper mode needs no key (LIVE unset or 0, or pass --paper).")
+
+
+def _kill_secrets() -> Secrets:
+    """Settings for the kill command, which must work even when the environment is broken: a value such
+    as ``LIVE=live`` fails pydantic's bool parsing, so retry with ``LIVE`` forced to 0 (the kill file and
+    DSN still come from the environment / .env), then fall back to the defaults."""
+    try:
+        return settings.secrets()
+    except Exception as e:  # noqa: BLE001
+        err_console.print(f"[yellow]warning:[/yellow] the settings do not validate ({type(e).__name__}); treating LIVE as 0 to find the kill file")
+        try:
+            return Secrets(live=False)
+        except Exception:  # noqa: BLE001
+            return Secrets.model_construct()
+
+
+def _set_kill_flags(reason: str, *, live: bool = True, paper: bool = True) -> list[str]:
+    """Persist the kill flag(s) the OMS reads at startup (an existing flag and its reason are kept).
+    Returns the keys written."""
+    from sigcup.db import engine as dbengine
+    from sigcup.db.repo import kv_get, kv_set
+
+    _init_db()
+    written: list[str] = []
+    with dbengine.session() as s:
+        for key, is_paper, wanted in ((KV_KILLED, False, live), (KV_KILLED_PAPER, True, paper)):
+            if wanted and not kv_get(s, key):
+                kv_set(s, key, {"reason": reason, "ts": utc_now().isoformat(), "source": "cli", "paper": is_paper})
+                written.append(key)
+    return written
+
+
+def _is_probe_writes(arg: str) -> bool:
+    """``--probe-writes`` or anything argparse would expand to it (``--probe``, ``--probe-writes=...``)."""
+    name = arg.split("=", 1)[0]
+    return len(name) >= 3 and name.startswith("--") and PROBE_WRITES.startswith(name)
 
 
 def describe_dsn(dsn: str) -> str:
@@ -203,13 +249,15 @@ def bootstrap(
     Extra arguments are passed through to scripts/bootstrap_races.py (see `sigcup bootstrap -- --help`).
     """
     sec = settings.secrets()
-    if probe_writes:
+    extra = list(ctx.args)
+    passthrough_probe = any(_is_probe_writes(a) for a in extra)  # `sigcup bootstrap -- --probe-writes`
+    if probe_writes or passthrough_probe:
         require_live(sec, "--probe-writes (it places real orders)")
     mod = load_script("bootstrap_races", what="the bootstrap script")
     main = getattr(mod, "main", None)
     if main is None:
         fail("the bootstrap script has no main(argv)")
-    argv = list(ctx.args) + (["--probe-writes"] if probe_writes else [])
+    argv = extra + ([PROBE_WRITES] if probe_writes and not passthrough_probe else [])
     _init_db()
     code = main(argv)
     raise typer.Exit(int(code or 0))
@@ -217,15 +265,22 @@ def bootstrap(
 
 @app.command()
 def trade(
-    paper: bool = typer.Option(True, "--paper/--live", help="Paper mode (default) or LIVE orders (needs LIVE=1 and SIG_API_KEY)."),
+    paper: bool | None = typer.Option(None, "--paper/--live", help="Force paper mode, or LIVE orders (needs LIVE=1 and SIG_API_KEY). Default: LIVE=1 -> live, otherwise paper."),
     once: bool = typer.Option(False, "--once", help="One refresh / model / reconcile pass, then exit."),
 ) -> None:
-    """Run the trader process (the only process that holds the trade key)."""
+    """Run the trader process (the only process that holds the trade key). Without a flag it follows LIVE."""
     sec = settings.secrets()
+    explicit = paper is not None
+    if paper is None:
+        paper = not sec.live
     if not paper:
-        require_live(sec, "--live")
+        require_live(sec, "--live" if explicit else "live trading (LIVE=1 and no --paper)")
     if sec.kill_path.exists():
-        err_console.print(f"[yellow]warning:[/yellow] kill file present at {sec.kill_path}: the trader will refuse to trade until `sigcup kill --clear`")
+        err_console.print(f"[yellow]warning:[/yellow] kill file present at {sec.kill_path}: the trader starts killed (cancels, sends nothing) until `sigcup kill --clear`")
+        try:
+            _set_kill_flags(f"kill file present: {sec.kill_path}", live=not paper, paper=paper)
+        except Exception as e:  # noqa: BLE001 - the trader still checks the file on every cycle
+            log.warning("could not set the kill flag in the database: %s", e)
     run = load_entry("sigcup.trader.loop", "run", what="the trader")
     console.print(f"trader: mode={'LIVE' if not paper else 'paper'} once={once}")
     result = run_async(run(paper=paper, once=once))
@@ -348,8 +403,9 @@ def status(json_out: bool = typer.Option(False, "--json", help="Print the plain 
 # ---------------------------------------------------------------------------------------------
 KILL_NEXT = """[bold]What happens next[/bold]
  1. The trader checks for the file every 5 s (and on every model cycle): it cancels every resting
-    order (cancel-all), records a 'killed' flag in the database, logs KILL SWITCH and exits.
- 2. pm2 restarts the process, but it refuses to trade while the file exists or the flag is set.
+    order (cancel-all), logs KILL SWITCH and exits once nothing is left open.
+ 2. The 'killed' flag is already set in the database, so pm2's restart (or any later start) begins
+    killed: it cancels what is open and sends nothing while the file exists or the flag is set.
  3. Check: `sigcup status` (open orders 0, trader status 'killed') and `pm2 logs trader`.
  4. To resume after investigating: `sigcup kill --clear`, then `pm2 restart trader`."""
 
@@ -363,7 +419,7 @@ def kill(
     from sigcup.db import engine as dbengine
     from sigcup.db.repo import kv_get, kv_set
 
-    sec = settings.secrets()
+    sec = _kill_secrets()
     path = sec.kill_path
     if clear:
         if path.exists():
@@ -371,15 +427,24 @@ def kill(
             console.print(f"removed {path}")
         else:
             console.print(f"no kill file at {path}")
-        _init_db()
-        with dbengine.session() as s:
-            flag = kv_get(s, "killed")
-            kv_set(s, "killed", None)
-        console.print(f"database kill flag cleared{f' (was: {flag})' if flag else ''}. Run `pm2 restart trader` to resume trading.")
+        try:
+            _init_db()
+            with dbengine.session() as s:
+                flag = kv_get(s, KV_KILLED)
+                kv_set(s, KV_KILLED, None)
+                kv_set(s, KV_KILLED_PAPER, None)
+        except Exception as e:  # noqa: BLE001 - e.g. settings that do not validate
+            fail(f"could not clear the database kill flags ({type(e).__name__}: {str(e).splitlines()[0]}): fix the settings and rerun `sigcup kill --clear`")
+        console.print(f"database kill flags cleared{f' (was: {flag})' if flag else ''}. Run `pm2 restart trader` to resume trading.")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
     console.print(f"[bold red]kill file created:[/bold red] {path}")
+    try:
+        _set_kill_flags(f"sigcup kill (kill file {path})")
+        console.print("database kill flags set: a trader that (re)starts begins killed")
+    except Exception as e:  # noqa: BLE001 - the file alone still stops a running trader
+        err_console.print(f"[yellow]warning:[/yellow] could not set the database kill flag ({type(e).__name__}: {e}); a running trader still stops on the file")
     console.print(KILL_NEXT)
     try:
         d = _status_dict()

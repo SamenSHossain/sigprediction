@@ -148,7 +148,7 @@ def test_sparse_data_never_crashes(db):
     b = res["platforms"]["bluesky"]
     assert b["n_features"] == 1 and b["n_races_with_prices"] == 0 and b["xcorr_sig"] == {} and b["ic_sig"]["n"] == 0
     y = res["platforms"]["youtube"]
-    assert y["n_races_with_prices"] == 1 and y["xcorr_sig"] == {} and y["best_lag_sig"] is None
+    assert y["n_races_with_prices"] == 0 and y["xcorr_sig"] == {} and y["best_lag_sig"] is None  # no quotes, no refs: not priced
     render_text(leadlag.render(res))
     with dbengine.session() as s:
         assert leadlag.compute(s, NOW, days=0)["platforms"] == {}

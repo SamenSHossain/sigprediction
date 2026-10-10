@@ -9,10 +9,14 @@ formula covers all four side/action combinations::
 
 ``compute(session, now)`` fills the ``clv`` table incrementally:
 
-* ``price_24h``  the SIG quote mid nearest to ``fill.ts + 24 h`` within +/- 1 h (null until a quote
-  that late exists; retried every pass while the window is still open, then left null).
-* ``price_close`` the last quote at or before the market's close (its ``settlement_date`` when known,
-  else the competition deadline); only computed once that moment has passed.
+* ``price_24h``  the SIG mid as of ``fill.ts + 24 h``: the last Quote row at or before that moment
+  (BookState writes a row only when the top of book changes, so on a quiet book that row can be
+  hours or days old and is still the book's state). Only when no row exists at or before the target
+  is the first quote within 1 h after it used. Computed only once the target has passed (never from a
+  pass that runs before it); left null if the market has no quote by then.
+* ``price_close`` the last quote at or before the market's close: its ``settlement_date`` when known,
+  capped at the competition deadline (no order can be sent after it, so later prices are not our
+  closing line); only computed once that moment has passed.
 
 ``aggregate_by_strategy(session)`` returns one plain dict per strategy tag (plus an ``all`` row) for the
 daily report; ``render_table(rows)`` turns them into a rich table.
@@ -121,14 +125,34 @@ def last_quote_before(session: Session, exchange_id: str, cutoff: datetime) -> Q
     return None
 
 
+def quote_as_of(session: Session, exchange_id: str, target: datetime, window: timedelta = WINDOW) -> Quote | None:
+    """The book as of ``target``: the last priced Quote at or before it; when there is none, the first
+    priced Quote within ``window`` after it (None if neither exists)."""
+    q = last_quote_before(session, exchange_id, target)
+    if q is not None:
+        return q
+    target = ensure_utc(target)
+    rows = (
+        session.execute(
+            select(Quote)
+            .where(Quote.exchange_id == exchange_id, Quote.ts > target, Quote.ts <= target + window)
+            .order_by(Quote.ts, Quote.id)
+        )
+        .scalars()
+        .all()
+    )
+    return next((r for r in rows if quote_mid(r) is not None), None)
+
+
 def market_close(session: Session, exchange_id: str, deadline: datetime, cache: dict[str, datetime] | None = None) -> datetime:
-    """When a market's closing line is fixed: its settlement_date if known, else the deadline."""
+    """When a market's closing line is fixed: its settlement_date if known (capped at the trading
+    deadline, after which no order can be sent), else the deadline."""
     if cache is not None and exchange_id in cache:
         return cache[exchange_id]
     close = ensure_utc(deadline)
     m = session.execute(select(Market).where(Market.exchange_id == exchange_id)).scalars().first()
     if m is not None and m.settlement_date is not None:
-        close = ensure_utc(m.settlement_date)
+        close = min(close, ensure_utc(m.settlement_date))
     if cache is not None:
         cache[exchange_id] = close
     return close
@@ -187,8 +211,8 @@ def compute(
         # -- 24 h price ---------------------------------------------------------------------
         if row.price_24h is None:
             target = ts + horizon
-            if now >= target - window:
-                q = nearest_quote(session, fill.exchange_id, target, window)
+            if now >= target:
+                q = quote_as_of(session, fill.exchange_id, target, window)
                 mid = quote_mid(q)
                 if mid is not None:
                     row.price_24h = mid
@@ -279,12 +303,16 @@ def _fmt(v: float | None, pct: bool = False, digits: int = 3) -> str:
 
 
 def render_table(rows: list[dict], title: str = "Closing-line value by strategy") -> Table:
-    """Rich table for ``aggregate_by_strategy`` rows (CLV in price units; totals in SUSQies)."""
+    """Rich table for ``aggregate_by_strategy`` rows (CLV in price units; totals in SUSQies). Rows that
+    carry a ``mode`` key (paper / live, as the daily report builds them) get a leading mode column."""
     t = Table(title=title, expand=False)
-    for col in ("strategy", "fills", "shares", "n24h", "clv24h", "wclv24h", "sum24h", "hit24h", "nclose", "clvclose", "sumclose", "hitclose"):
-        t.add_column(col, justify="right" if col != "strategy" else "left")
+    with_mode = any("mode" in r for r in rows)
+    cols = (("mode",) if with_mode else ()) + ("strategy", "fills", "shares", "n24h", "clv24h", "wclv24h", "sum24h", "hit24h", "nclose", "clvclose", "sumclose", "hitclose")
+    for col in cols:
+        t.add_column(col, justify="left" if col in ("mode", "strategy") else "right")
     for r in rows:
         t.add_row(
+            *((str(r.get("mode", "-")),) if with_mode else ()),
             str(r["strategy"]),
             str(r["n_fills"]),
             str(r["shares"]),
@@ -299,5 +327,5 @@ def render_table(rows: list[dict], title: str = "Closing-line value by strategy"
             _fmt(r["hit_close"], pct=True),
         )
     if not rows:
-        t.add_row("(no fills yet)", *[""] * 11)
+        t.add_row("(no fills yet)", *[""] * (len(cols) - 1))
     return t

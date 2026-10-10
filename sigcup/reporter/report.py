@@ -14,7 +14,11 @@ P&L convention: every fill is reduced to a signed YES-equivalent trade (buy NO a
 1 - p) and run through an average-cost ledger per (strategy, market); realised P&L is booked when a
 fill reduces the position, the remainder is marked at ``Position.mark`` (the exchange's mark; the
 latest quote mid, then the average cost, are the fallbacks). Fees are subtracted. Paper and live fills
-are never mixed in one row.
+are never mixed in one row (P&L and CLV both carry a ``mode`` column).
+
+Position convention (the producers: PaperAdapter and the OMS that copies its PositionInfo): ``quantity``
+is signed (+YES / -NO) and ``avg_price`` is the price paid per share of the side held, so a NO position
+carries the NO price; ``mark`` is the YES mid. ``yes_avg_price`` converts the cost to YES terms.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from rich.table import Table
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from sigcup.common.log import get_logger
 from sigcup.common.time import ensure_utc, hours_to, utc_now
 from sigcup.db.models import (
     AccountSnap,
@@ -47,6 +52,8 @@ from sigcup.db.repo import kv_get, latest_quotes, latest_ref_prices
 from sigcup.reporter import clv as clvmod
 from sigcup.reporter.clv import fill_direction, fill_yes_price, quote_mid
 from sigcup.settings import Secrets, StrategyConfig, config
+
+log = get_logger(__name__)
 
 EXPECTED_PROCESSES = ("trader", "feeds", "reporter")
 STALE_AFTER_S: dict[str, float] = {"trader": 90, "feeds": 240, "reporter": 4500}
@@ -80,6 +87,21 @@ def _mark_for(exchange_id: str, positions: dict[str, Position], quotes: dict[str
     if mid is not None:
         return mid
     return fallback
+
+
+def yes_avg_price(quantity: int, avg_price: float | None) -> float | None:
+    """``Position.avg_price`` in YES terms: the YES price paid for a long position, ``1 - NO price paid``
+    for a NO (negative) position."""
+    if avg_price is None:
+        return None
+    return float(avg_price) if quantity >= 0 else 1.0 - float(avg_price)
+
+
+def at_risk(quantity: int, mark: float | None) -> float:
+    """What a position is worth at the YES ``mark``: YES shares x mark, NO shares x (1 - mark)."""
+    if mark is None or not quantity:
+        return 0.0
+    return quantity * mark if quantity > 0 else -quantity * (1.0 - mark)
 
 
 def _latest(session: Session, model: Any) -> Any:
@@ -159,23 +181,30 @@ def open_intents(session: Session) -> dict[str, Any]:
 
 
 def exposure(session: Session) -> dict[str, Any]:
-    """Net YES-equivalent exposure (signed shares x price) by party, state and chamber, and the
-    partisan tilt (long D / short R count as pro-Dem)."""
+    """Net YES-equivalent exposure (signed shares x YES mark: ``value``, ``gross`` = |value|) and the
+    capital at risk (YES shares x mark + NO shares x (1 - mark): ``at_risk``) by party, state and
+    chamber, plus the partisan tilt (long D / short R count as pro-Dem)."""
     positions = {p.exchange_id: p for p in session.execute(select(Position)).scalars().all() if p.quantity}
     markets, races = _market_index(session)
     quotes = latest_quotes(session)
-    by_party: dict[str, dict[str, float]] = defaultdict(lambda: {"shares": 0.0, "value": 0.0, "gross": 0.0, "n": 0})
-    by_state: dict[str, dict[str, float]] = defaultdict(lambda: {"shares": 0.0, "value": 0.0, "gross": 0.0, "n": 0})
-    by_chamber: dict[str, dict[str, float]] = defaultdict(lambda: {"shares": 0.0, "value": 0.0, "gross": 0.0, "n": 0})
+    def new_bucket() -> dict[str, float]:
+        return {"shares": 0.0, "value": 0.0, "gross": 0.0, "at_risk": 0.0, "n": 0}
+
+    by_party: dict[str, dict[str, float]] = defaultdict(new_bucket)
+    by_state: dict[str, dict[str, float]] = defaultdict(new_bucket)
+    by_chamber: dict[str, dict[str, float]] = defaultdict(new_bucket)
     rows: list[dict[str, Any]] = []
     net_dem = 0.0
     gross = 0.0
+    risk_total = 0.0
     for eid, p in positions.items():
         m = markets.get(eid)
         r = races.get(m.race_id) if m else None
-        mark = _mark_for(eid, positions, quotes, float(p.avg_price) if p.avg_price is not None else None)
         qty = int(p.quantity)
+        avg_yes = yes_avg_price(qty, p.avg_price)
+        mark = _mark_for(eid, positions, quotes, avg_yes)
         value = qty * mark if mark is not None else 0.0
+        risk = at_risk(qty, mark)
         party = (m.party if m else "?") or "?"
         state = (r.state if r and r.state else (r.chamber if r else "?")) or "?"
         chamber = (r.chamber if r else "?") or "?"
@@ -183,12 +212,14 @@ def exposure(session: Session) -> dict[str, Any]:
             bucket[key]["shares"] += qty
             bucket[key]["value"] += value
             bucket[key]["gross"] += abs(value)
+            bucket[key]["at_risk"] += risk
             bucket[key]["n"] += 1
         if party.upper() == "D":
             net_dem += value
         elif party.upper() == "R":
             net_dem -= value
         gross += abs(value)
+        risk_total += risk
         rows.append(
             {
                 "exchange_id": eid,
@@ -197,15 +228,18 @@ def exposure(session: Session) -> dict[str, Any]:
                 "state": r.state if r else None,
                 "quantity": qty,
                 "avg_price": float(p.avg_price) if p.avg_price is not None else None,
+                "avg_yes": avg_yes,
                 "mark": mark,
                 "value": value,
-                "unrealised": (qty * (mark - float(p.avg_price))) if (mark is not None and p.avg_price is not None) else None,
+                "at_risk": risk,
+                "unrealised": (qty * (mark - avg_yes)) if (mark is not None and avg_yes is not None) else None,
             }
         )
     rows.sort(key=lambda d: -abs(d["value"]))
     return {
         "n_positions": len(rows),
         "gross": gross,
+        "at_risk": risk_total,
         "net_dem_equivalent": net_dem,
         "by_party": {k: dict(v) for k, v in sorted(by_party.items())},
         "by_state": {k: dict(v) for k, v in sorted(by_state.items(), key=lambda kv: -kv[1]["gross"])},
@@ -250,6 +284,7 @@ def status(session: Session, now: datetime | None = None, cfg: StrategyConfig | 
         "exposure": exposure(session),
         "leaderboard": leaderboard(session, now),
         "kill": kill_state(session, sec),
+        "live_env": bool(sec.live) if sec is not None else None,
     }
     d["alerts"] = alerts(d, cfg)
     return d
@@ -264,6 +299,8 @@ def alerts(d: dict[str, Any], cfg: StrategyConfig) -> list[str]:
             out.append(f"{h['process']} heartbeat {how}")
         elif h["status"] not in ("ok", "paper", "live"):
             out.append(f"{h['process']} status {h['status']}")
+        elif h["process"] == "trader" and h["status"] == "paper" and d.get("live_env"):
+            out.append("LIVE=1 but the trader is running in paper mode (started with --paper?): nothing reaches the exchange")
     if d["kill"]["kill_file_present"]:
         out.append("KILL file present: trader will not trade")
     if d["kill"]["kv_flag"]:
@@ -396,37 +433,69 @@ def equity_curve(session: Session, now: datetime, cfg: StrategyConfig) -> dict[s
     }
 
 
-def calibration(session: Session, now: datetime, days: int = 1) -> dict[str, Any]:
-    """Fair-vs-price (and fair-vs-reference when the signal meta carries it) summary from Signal rows."""
+# (strategy, fair, price, edge, size, reference mid)
+_CalSample = tuple[str, float, float | None, float | None, int, float | None]
+
+
+def calibration(session: Session, now: datetime, days: int = 1, cfg: StrategyConfig | None = None) -> dict[str, Any]:
+    """Fair-vs-price and fair-vs-reference summary.
+
+    From the Signal rows of the last ``days`` when a producer wrote any (``source: "signals"``);
+    otherwise from the model's current fair values (``fairvalue.compute_all`` over every market, priced
+    against the latest SIG mid and the fair value's own ``ref`` component: ``source: "fair_values"``).
+    """
     since = now - timedelta(days=days)
     rows = session.execute(select(Signal).where(Signal.ts >= since)).scalars().all()
-    by_strategy: dict[str, dict[str, Any]] = {}
-    buckets: dict[str, dict[str, Any]] = {}
-    ref_gaps: list[float] = []
+    samples: list[_CalSample] = []
+    source = "signals"
+    error: str | None = None
     for s in rows:
         if s.fair is None:
             continue
-        fair = float(s.fair)
-        price = float(s.price) if s.price is not None else None
-        edge = float(s.edge) if s.edge is not None else ((fair - price) if price is not None else None)
-        d = by_strategy.setdefault(str(s.strategy or "?"), {"n": 0, "edge_sum": 0.0, "abs_edge_sum": 0.0, "size": 0})
+        meta = s.meta if isinstance(s.meta, dict) else {}
+        samples.append(
+            (
+                str(s.strategy or "?"),
+                float(s.fair),
+                float(s.price) if s.price is not None else None,
+                float(s.edge) if s.edge is not None else None,
+                int(s.size or 0),
+                _signal_ref(meta),
+            )
+        )
+    n_rows = len(rows)
+    if not rows:
+        source = "fair_values"
+        try:
+            samples = _fair_value_samples(session, now, cfg or config())
+        except Exception as e:  # noqa: BLE001 - the report must render even if the model cannot run
+            log.warning("calibration: fair values unavailable: %s: %s", type(e).__name__, e)
+            error = f"{type(e).__name__}: {e}"
+            samples = []
+        n_rows = len(samples)
+    by_strategy: dict[str, dict[str, Any]] = {}
+    buckets: dict[str, dict[str, Any]] = {}
+    ref_gaps: list[float] = []
+    for strategy, fair, price, edge_raw, size, ref in samples:
+        edge = edge_raw if edge_raw is not None else ((fair - price) if price is not None else None)
+        d = by_strategy.setdefault(strategy, {"n": 0, "edge_sum": 0.0, "abs_edge_sum": 0.0, "size": 0})
         d["n"] += 1
         if edge is not None:
             d["edge_sum"] += edge
             d["abs_edge_sum"] += abs(edge)
-        d["size"] += int(s.size or 0)
+        d["size"] += size
         if price is not None:
             lo = int(fair * 10) / 10 if fair < 1 else 0.9
             b = buckets.setdefault(f"{lo:.1f}-{lo + 0.1:.1f}", {"n": 0, "fair_sum": 0.0, "price_sum": 0.0})
             b["n"] += 1
             b["fair_sum"] += fair
             b["price_sum"] += price
-        meta = s.meta if isinstance(s.meta, dict) else {}
-        ref = _first_number(meta, *REF_KEYS)
         if ref is not None:
             ref_gaps.append(fair - ref)
     return {
-        "n_signals": len(rows),
+        "source": source,
+        "error": error,
+        "n_signals": n_rows,
         "window_days": days,
         "by_strategy": {
             k: {"n": v["n"], "mean_edge": v["edge_sum"] / v["n"] if v["n"] else None, "mean_abs_edge": v["abs_edge_sum"] / v["n"] if v["n"] else None, "size": v["size"]}
@@ -437,8 +506,51 @@ def calibration(session: Session, now: datetime, days: int = 1) -> dict[str, Any
     }
 
 
+def _signal_ref(meta: dict[str, Any]) -> float | None:
+    """The reference mid recorded with a signal: ``components.ref`` first, then any reference key (never
+    a FairValue ``weights`` entry, whose ``ref`` is a blending weight, not a price)."""
+    comps = meta.get("components")
+    if isinstance(comps, dict):
+        n = _first_number(comps, *REF_KEYS)
+        if n is not None:
+            return n
+    return _first_number(meta, *REF_KEYS)
+
+
+def _fair_value_samples(session: Session, now: datetime, cfg: StrategyConfig) -> list[_CalSample]:
+    """One calibration sample per market the model prices now (imported lazily: the reporter never
+    depends on the trader package being importable for its other sections)."""
+    from sigcup.trader import fairvalue
+    from sigcup.trader.types import MarketView
+
+    markets, races = _market_index(session)
+    quotes = latest_quotes(session)
+    views: list[MarketView] = []
+    for eid, m in markets.items():
+        r = races.get(m.race_id)
+        if r is None:
+            continue
+        q = quotes.get(eid)
+        views.append(
+            MarketView(
+                exchange_id=eid, race_id=m.race_id, party=m.party, chamber=r.chamber, state=r.state,
+                bid=float(q.bid) if q is not None and q.bid is not None else None,
+                ask=float(q.ask) if q is not None and q.ask is not None else None,
+                last=float(q.last) if q is not None and q.last is not None else None,
+                ts=q.ts if q is not None else None, status=m.status or "open",
+            )
+        )
+    out: list[_CalSample] = []
+    for eid, fv in sorted(fairvalue.compute_all(session, cfg, views, now).items()):
+        comps = fv.components if isinstance(fv.components, dict) else {}
+        ref = comps.get("ref")
+        out.append(("fair_value", float(fv.fair), quote_mid(quotes.get(eid)), None, 0, float(ref) if ref is not None else None))
+    return out
+
+
 REF_KEYS = ("ref", "ref_mid", "reference", "ref_price", "kalshi", "polymarket")
 VALUE_KEYS = ("mid", "yes_mid", "price", "fair", "value")
+SKIP_KEYS = ("weights", "weight")  # blending weights share key names with the components
 
 
 def _as_number(v: Any) -> float | None:
@@ -456,15 +568,16 @@ def _as_number(v: Any) -> float | None:
 
 def _first_number(meta: dict[str, Any], *keys: str, depth: int = 3) -> float | None:
     """The first numeric value under any of ``keys`` (a dict value yields its mid/price), searching
-    nested dicts up to ``depth`` levels so ``{"components": {"ref": {...}}}`` is found too."""
+    nested dicts up to ``depth`` levels so ``{"components": {"ref": {...}}}`` is found too (never
+    inside a ``weights`` dict)."""
     for k in keys:
         if k in meta:
             n = _as_number(meta[k])
             if n is not None:
                 return n
     if depth > 0:
-        for v in meta.values():
-            if isinstance(v, dict):
+        for k, v in meta.items():
+            if isinstance(v, dict) and k not in SKIP_KEYS:
                 n = _first_number(v, *keys, depth=depth - 1)
                 if n is not None:
                     return n
@@ -531,6 +644,12 @@ def rank_history(session: Session, now: datetime, days: int = 14) -> dict[str, A
     }
 
 
+def clv_by_mode(session: Session) -> list[dict[str, Any]]:
+    """CLV rows per strategy with a ``mode`` key: the live rows (and their ``all``) first, then paper.
+    Paper fills (synthetic crosses at our resting price) never dilute the live scorecard."""
+    return [{"mode": mode, **r} for mode, paper in (("live", False), ("paper", True)) for r in clvmod.aggregate_by_strategy(session, paper=paper)]
+
+
 def daily(session: Session, now: datetime | None = None, cfg: StrategyConfig | None = None) -> dict[str, Any]:
     """The daily report as a plain dict (P&L by strategy, CLV, calibration, rank history)."""
     now = ensure_utc(now or utc_now())
@@ -541,8 +660,8 @@ def daily(session: Session, now: datetime | None = None, cfg: StrategyConfig | N
         "hours_to_deadline": hours_to(cfg.deadline_utc, now),
         "equity": equity_curve(session, now, cfg),
         "pnl": pnl_by_strategy(session),
-        "clv": clvmod.aggregate_by_strategy(session),
-        "calibration": calibration(session, now),
+        "clv": clv_by_mode(session),
+        "calibration": calibration(session, now, cfg=cfg),
         "sig_vs_ref": sig_vs_ref(session),
         "rank_history": rank_history(session, now),
         "exposure": exposure(session),
@@ -587,14 +706,14 @@ def render_status(d: dict[str, Any]) -> Group:
         oi.add_row("(none)", "", "", "", "", "")
 
     ex = d["exposure"]
-    exp = Table(title=f"Exposure  (positions={ex['n_positions']} gross={ex['gross']:.0f} net D-equivalent={ex['net_dem_equivalent']:+.0f})")
-    for col in ("group", "key", "positions", "shares", "value", "gross"):
+    exp = Table(title=f"Exposure  (positions={ex['n_positions']} YES-equiv gross={ex['gross']:.0f} at risk={ex.get('at_risk', 0.0):.0f} net D-equivalent={ex['net_dem_equivalent']:+.0f})")
+    for col in ("group", "key", "positions", "shares", "value", "gross", "at risk"):
         exp.add_column(col, justify="right" if col not in ("group", "key") else "left")
     for group in ("by_party", "by_chamber", "by_state"):
         for k, v in list(ex[group].items())[:12]:
-            exp.add_row(group[3:], k, str(int(v["n"])), _n(v["shares"]), _n(v["value"], sign=True), _n(v["gross"]))
+            exp.add_row(group[3:], k, str(int(v["n"])), _n(v["shares"]), _n(v["value"], sign=True), _n(v["gross"]), _n(v.get("at_risk")))
     if not ex["positions"]:
-        exp.add_row("(flat)", "", "", "", "", "")
+        exp.add_row("(flat)", "", "", "", "", "", "")
 
     parts: list[Any] = [hb, acct, oi, exp]
     if d.get("alerts"):
@@ -625,7 +744,8 @@ def render_daily(d: dict[str, Any]) -> Group:
         pnl.add_row("(no fills yet)", *[""] * 9)
 
     cal = d["calibration"]
-    ct = Table(title=f"Calibration (last {cal['window_days']} d, {cal['n_signals']} signals; fair-vs-ref n={cal['fair_vs_ref']['n']} mean gap={_n(cal['fair_vs_ref']['mean_gap'], 3, True)})")
+    basis = f"last {cal['window_days']} d, {cal['n_signals']} signals" if cal.get("source", "signals") == "signals" else f"current fair values, {cal['n_signals']} markets"
+    ct = Table(title=f"Calibration ({basis}; fair-vs-ref n={cal['fair_vs_ref']['n']} mean gap={_n(cal['fair_vs_ref']['mean_gap'], 3, True)})")
     for col in ("strategy", "n", "mean edge", "mean |edge|", "size"):
         ct.add_column(col, justify="right" if col != "strategy" else "left")
     for k, v in cal["by_strategy"].items():
@@ -633,7 +753,7 @@ def render_daily(d: dict[str, Any]) -> Group:
     for k, v in cal["buckets"].items():
         ct.add_row(f"fair {k}", str(v["n"]), f"fair {v['mean_fair']:.3f}", f"price {v['mean_price']:.3f}", "")
     if not cal["by_strategy"]:
-        ct.add_row("(no signals yet)", "", "", "", "")
+        ct.add_row("(no signals yet)" if not cal.get("error") else f"(fair values unavailable: {cal['error'][:60]})", "", "", "", "")
 
     sr = d["sig_vs_ref"]
     st = Table(title=f"SIG vs reference mid (n={sr['n']} mean gap={_n(sr['mean_gap'], 3, True)} mean |gap|={_n(sr['mean_abs_gap'], 3)})")

@@ -1,4 +1,4 @@
-"""Lead-lag cross-correlation of feature changes vs SIG/reference price changes at 1-24 h lags and the
+"""Lead-lag cross-correlation of feature changes vs SIG/reference price changes at 0-24 h lags and the
 information coefficient (Spearman of z-score vs next-day price change) per platform.
 
 This is the gate for the ``fade`` / ``follow`` strategies (literature.md section on sentiment): they stay
@@ -16,6 +16,8 @@ Series construction
   (bid/ask mid, else last), reference mids from ``RefPrice`` via the market's Kalshi / Polymarket keys.
   Both are resampled to hourly closes (last value in the hour, forward-filled) and differenced.
 * **cross-correlation** at lag ``k`` = Pearson corr of ``dz(t)`` with ``dp(t + k)`` pooled over races.
+  Lag 0 is included: it pairs the z change with the price change in the first hour AFTER the z is
+  stamped (00:00-01:00 UTC), which is still no look-ahead. ``best_lag`` needs ``r >= MIN_BEST_R``.
 * **IC** = Spearman rho of the day-``D`` z-score vs the day ``D+1`` close-to-close price change (daily
   closes are the last quote at or before each 00:00 UTC), pooled over races per platform.
 
@@ -41,7 +43,9 @@ from sigcup.db.models import Feature, Market, Quote, RefPrice
 from sigcup.reporter.clv import quote_mid
 
 MAX_LAG_H = 24
+MIN_LAG_H = 0  # lag 0 = a reaction within the first hour after the daily z is stamped
 MIN_PAIRS = 5  # fewer aligned pairs than this: report None
+MIN_BEST_R = 0.05  # a smaller correlation is noise, not a lead
 DEFAULT_DAYS = 14
 
 Point = tuple[datetime, float]
@@ -96,11 +100,13 @@ def pooled_cross_correlation(
     pairs: Iterable[tuple[Sequence[float], Sequence[float]]],
     max_lag: int = MAX_LAG_H,
     min_pairs: int = MIN_PAIRS,
+    min_lag: int = 1,
 ) -> dict[int, dict[str, Any]]:
-    """Cross-correlation per lag with (x, y) points pooled across several aligned series."""
+    """Cross-correlation per lag (``min_lag``..``max_lag``) with (x, y) points pooled across several
+    aligned series."""
     pairs = [(np.asarray(x, dtype=float), np.asarray(y, dtype=float)) for x, y in pairs]
     out: dict[int, dict[str, Any]] = {}
-    for lag in range(1, max_lag + 1):
+    for lag in range(max(0, min_lag), max_lag + 1):
         xs: list[float] = []
         ys: list[float] = []
         for x, y in pairs:
@@ -114,13 +120,13 @@ def pooled_cross_correlation(
     return out
 
 
-def best_lag(xcorr: dict[int, dict[str, Any]]) -> int | None:
-    """The lag with the largest positive correlation (None when nothing is defined)."""
+def best_lag(xcorr: dict[int, dict[str, Any]], min_r: float = MIN_BEST_R) -> int | None:
+    """The lag with the largest positive correlation, if it reaches ``min_r`` (else None)."""
     cands = [(v["r"], k) for k, v in xcorr.items() if v.get("r") is not None]
     if not cands:
         return None
     r, k = max(cands)
-    return k if r > 0 else None
+    return k if r >= min_r else None
 
 
 def floor_hour(ts: datetime) -> datetime:
@@ -255,6 +261,7 @@ def compute(session: Session, now: datetime, *, days: int = DEFAULT_DAYS, max_la
         "start": start.isoformat(),
         "end": end.isoformat(),
         "days": days,
+        "min_lag_h": MIN_LAG_H,
         "max_lag_h": max_lag_h,
         "n_platforms": len(feats),
         "platforms": {},
@@ -297,8 +304,8 @@ def compute(session: Session, now: datetime, *, days: int = DEFAULT_DAYS, max_la
         for race_id, by_day in races.items():
             n_features += len(by_day)
             prices = race_prices(race_id)
-            if not prices:
-                continue
+            if not prices or not (prices["sig_dp"] or prices["ref_dp"]):
+                continue  # no market leg, or no quotes / reference prices in the window
             n_races_used += 1
             z_points: list[Point] = [(_day_end(day), z) for day, z in by_day.items()]
             z_h = resample(z_points, start, end, timedelta(hours=1))
@@ -314,8 +321,8 @@ def compute(session: Session, now: datetime, *, days: int = DEFAULT_DAYS, max_la
                     if change is not None:
                         acc[0].append(z)
                         acc[1].append(change)
-        xs = pooled_cross_correlation(sig_pairs, max_lag=max_lag_h) if sig_pairs else {}
-        xr = pooled_cross_correlation(ref_pairs, max_lag=max_lag_h) if ref_pairs else {}
+        xs = pooled_cross_correlation(sig_pairs, max_lag=max_lag_h, min_lag=MIN_LAG_H) if sig_pairs else {}
+        xr = pooled_cross_correlation(ref_pairs, max_lag=max_lag_h, min_lag=MIN_LAG_H) if ref_pairs else {}
         result["platforms"][platform] = {
             "n_features": n_features,
             "n_races": len(races),
@@ -389,7 +396,7 @@ def render(result: dict[str, Any]) -> Group:
             xc.add_column(f"{name} sig", justify="right")
             xc.add_column(f"{name} ref", justify="right")
         max_lag = int(result.get("max_lag_h", MAX_LAG_H))
-        for lag in range(1, max_lag + 1):
+        for lag in range(int(result.get("min_lag_h", 1)), max_lag + 1):
             cells = [f"{lag} h"]
             for p in platforms.values():
                 for key in ("xcorr_sig", "xcorr_ref"):
