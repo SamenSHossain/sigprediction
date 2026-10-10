@@ -1,0 +1,111 @@
+# Strategy and risk configuration. All money quantities are fractions of the starting bankroll
+# unless stated. Prices are probabilities in [0.005, 0.995] on a 0.005 tick.
+bankroll_start: 100000
+deadline_utc: "2026-11-04T17:00:00Z"      # last moment any order may be sent (noon EST, after DST ends)
+
+limits:
+  writes_per_min: 25        # exchange allows 30; keep headroom
+  reads_per_min: 90         # exchange allows 100
+  realtime_channels: 94     # ~100 per connection minus the user channel and headroom
+  write_timeout_s: 45       # writes took 14-36 s at the open
+  read_timeout_s: 20
+
+cadence:
+  bulk_prices_s: 30
+  reconcile_s: 60
+  leaderboard_s: 900
+  model_s: 60
+  depth_refresh_s: 300
+
+risk:
+  kelly_fraction_default: 0.25
+  kelly_fraction_theta: 0.5
+  kelly_fraction_arb: 0.5
+  per_race_cap_frac: 0.03       # netted across both party legs of a race
+  per_state_cap_frac: 0.08
+  national_swing_pts: 4.0       # uniform margin shift used for the stress test
+  max_swing_loss_frac: 0.25     # the stress loss must not exceed this
+  liquid_reserve_frac: 0.20     # through Oct 31
+  liquid_reserve_frac_final72h: 0.30
+  daily_loss_limit_frac: 0.05   # triggers the kill switch
+  order_expiry_s: 900           # dead-man's switch on every resting order
+  max_position_shares: 50000
+
+theta:
+  min_fair: 0.85
+  fair_cap: 0.985
+  min_yield: 0.055              # bid <= min(ask, fair / (1 + min_yield))
+
+value:
+  band: [0.15, 0.85]
+  min_edge: 0.05
+  quote_offset: 0.02            # resting order at fair -/+ offset
+  requote_threshold: 0.02       # re-quote only when fair moved this much
+  requote_cooldown_s: 90
+
+arb:
+  min_profit: 0.005
+  require_api_exclusivity: true # never infer exclusivity from titles
+  max_legs: 10
+
+mm:
+  enabled: false
+  min_spread: 0.06
+  half_spread: 0.02
+  size: 20
+
+convex_sleeve:
+  budget_frac: 0.15
+  kelly_fraction: 0.5
+  min_edge: 0.05
+
+endgame:
+  enabled: true
+  final_hours: 72
+  rank_target: 3
+  reachable_gap_frac: 0.15      # (third-place total - ours) / ours below this => within reach
+  sleeve_frac_if_reachable: 0.30
+  sleeve_frac_if_placed: 0.0
+
+election_night:
+  start_utc: "2026-11-03T23:00:00Z"
+  ref_cadence_s: 10
+  take_when_ref_ge: 0.97        # take SIG liquidity only when real-money price >= this
+  min_lag: 0.08                 # ... and SIG lags by at least this
+  reserve_deploy_frac: 0.8      # share of the liquid reserve that may be spent on election night
+
+fairvalue:
+  t_df: 5
+  sigma_pts: {senate: 7.0, governor: 6.5, house: 9.0, control: 5.0}
+  ratings_prob: {safe: 0.97, likely: 0.85, lean: 0.68, tilt: 0.58, tossup: 0.50}
+  weights: {ref: 0.6, polls: 0.3, ratings: 0.1}
+  ref_min_liquidity: 1000       # below this, reference price weight shrinks
+  poll_halflife_days: 7
+  fundamentals_shrink: 0.3      # weight of fundamentals prior vs poll average
+
+simulation:
+  n_sims: 10000
+  national_sigma_pts: 2.75
+  state_sigma_pts: 2.5
+  race_sigma_pts: {senate: 4.5, governor: 4.5, house: 6.0}
+  seed: 2026
+
+sentiment:
+  baseline_days: 14
+  spike_z: 2.5
+  min_platforms: 2
+  enable_fade_follow: false     # stays off until measured IC > 0 on >= 1 week of data
+  max_posts_per_batch: 25
+  classifier_model: claude-haiku-5-5
+  escalation_model: claude-sonnet-5-5
+
+feeds:
+  kalshi_base: https://api.elections.kalshi.com/trade-api/v2
+  polymarket_gamma: https://gamma-api.polymarket.com
+  polymarket_clob: https://clob.polymarket.com
+  gdelt_doc: https://api.gdeltproject.org/api/v2/doc/doc
+  ref_cadence_s: 120
+  polls_cadence_s: 21600
+  news_cadence_s: 900
+  social_cadence_s: 900
+  youtube_cadence_s: 3600

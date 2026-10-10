@@ -1,0 +1,8 @@
+# News and social sources per race. Keys are race_ids from races.yaml; `global` applies to all.
+global:
+  rss:
+    - https://www.politico.com/rss/politics08.xml
+    - https://thehill.com/homenews/campaign/feed/
+    - https://centerforpolitics.org/crystalball/feed/
+  youtube_channels: []
+races: {}
