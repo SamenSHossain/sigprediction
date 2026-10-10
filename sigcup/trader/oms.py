@@ -505,13 +505,25 @@ class OMS:
 
     # -- public: startup -----------------------------------------------------------------------
     async def startup_reconcile(self) -> ReconcileReport:
-        """Resolve every NEW/SENT/UNCERTAIN/ACKED intent against the exchange before quoting anything."""
+        """Resolve every NEW/SENT/UNCERTAIN/ACKED intent against the exchange before quoting anything.
+
+        Starts killed when this mode's KV kill flag is set or the kill file exists (the file also sets the
+        flag and always sends cancel-all); a killed startup re-POSTs nothing."""
         async with self._lock:
             with dbengine.session() as s:
                 reason = self._load_kill_flag(s)
             if reason is not None and self.killed is None:
                 self.killed = reason
                 log.critical("kill flag is set in KV (%s): trading disabled until cleared", self.killed)
+            kill_file = self.kill_path is not None and self.kill_path.exists()
+            if kill_file and self.killed is None:
+                # a kill file without the flag (touched by hand, or a start that bypassed `sigcup trade`):
+                # killed BEFORE any intent is resolved, so nothing is re-POSTed; persisted like kill() does
+                self.killed = f"kill file present: {self.kill_path}"
+                self.kill_confirmed = False
+                log.critical("KILL SWITCH at startup: %s", self.killed)
+                with dbengine.session() as s:
+                    kv_set(s, self._kv_killed, {"reason": self.killed, "ts": self.clock().isoformat(), "paper": self.paper})
             rows = self._load_intents()
             self.intents = {r.id: r for r in rows}
             with dbengine.session() as s:
@@ -530,8 +542,8 @@ class OMS:
                 await self._resolve_intent(intent, open_orders, fills, allow_resend=True)
             self._recompute_reserved()
             if self.killed is not None:
-                if open_orders:  # a kill that was never confirmed: nothing may stay open while killed
-                    log.critical("killed with %d open orders: cancelling them", len(open_orders))
+                if open_orders or kill_file:  # nothing may stay open while killed; the file always means cancel-all
+                    log.critical("killed with %d open orders: cancel-all", len(open_orders))
                     await self.confirm_kill()
                 else:
                     self.kill_confirmed = True

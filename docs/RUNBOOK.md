@@ -8,9 +8,9 @@ Three long-running processes share one SQLite database (WAL mode):
 
 | pm2 app    | command                           | key used        | what it does |
 |------------|-----------------------------------|-----------------|--------------|
-| `trader`   | `python -m sigcup.cli trade`      | `SIG_API_KEY` (trade) | the ONLY process that talks to the exchange with a write-capable key: books, fair values, signals, risk, OMS, reconciliation, kill switch. Live when `.env` has `LIVE=1` (+ key), paper otherwise |
-| `feeds`    | `python -m sigcup.cli feeds`      | none (public APIs) + `SIG_READ_KEY` is *not* needed | Kalshi/Polymarket reference prices, ratings/polls, GDELT/RSS news, Bluesky/X/YouTube posts, stance classification, features, events |
-| `reporter` | `python -m sigcup.cli report loop`| none (database only) | hourly status line + CLV, daily report at 12:00 UTC, heartbeat |
+| `trader`   | `sigcup trade`                    | `SIG_API_KEY` (trade) | the ONLY process that talks to the exchange with a write-capable key: books, fair values, signals, risk, OMS, reconciliation, kill switch. Live when `.env` has `LIVE=1` (+ key), paper otherwise |
+| `feeds`    | `sigcup feeds`                    | none (public APIs) + `SIG_READ_KEY` is *not* needed | Kalshi/Polymarket reference prices, ratings/polls, GDELT/RSS news, Bluesky/X/YouTube posts, stance classification, features, events |
+| `reporter` | `sigcup report loop`              | none (database only) | hourly status line + CLV, daily report at 12:00 UTC, heartbeat |
 
 Everything else (`sigcup status`, `sigcup report …`, `sigcup canary`, `sigcup kill`) is a one-off
 command you run by hand.
@@ -30,8 +30,8 @@ cp .env.example .env && chmod 600 .env      # fill in keys (section 2)
 npm install -g pm2
 ```
 
-`.venv/bin/sigcup` and `.venv/bin/python -m sigcup.cli` are the same thing; the pm2 file runs them
-by absolute path so it never depends on `PATH`.
+`.venv/bin/sigcup` and `.venv/bin/python -m sigcup.cli` are the same thing; the pm2 file runs
+`.venv/bin/sigcup` by absolute path so it never depends on `PATH` (run `uv sync` before `pm2 start`).
 
 Run the tests once on the machine that will trade (no network is needed):
 
@@ -113,10 +113,13 @@ purpose: a crash loop must not burn the write budget with cancel-all / re-lay cy
 needs a few seconds to cancel quotes on shutdown. If a process is flapping, `pm2 stop` it and read
 the log before restarting.
 
-Check `pm2 status` once on the trading host after the first start: pm2 resolves each app's `script`
-as a file, so an entry such as `script: "-m"` fails with `Script not found: …/-m` and nothing runs.
-The apps must point `script` at `.venv/bin/sigcup` (args `trade` / `feeds` / `report loop`) or at
-`.venv/bin/python` (args `-m sigcup.cli …`), with `interpreter: "none"`.
+Every app runs `script: .venv/bin/sigcup` with `interpreter: "none"` and args `trade` / `feeds` /
+`report loop` (pm2 resolves `script` as a file, so `.venv/bin/sigcup` must exist: `uv sync` creates
+it; `tests/test_deploy_ecosystem.py` checks the file with node). The trader's args are plain `trade`
+on purpose: it is **paper unless `.env` has `LIVE=1` and `SIG_API_KEY`**, so going live is the explicit
+`.env` change of section 5 step 4, never an edit of the ecosystem file (do not add `--live` there or
+pin `LIVE` in its `env`). Check `pm2 status` once on the trading host after the first start: all
+three apps must show `online`.
 
 Changing `.env` or `config/settings.yaml` requires `pm2 restart <app>`.
 

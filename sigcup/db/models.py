@@ -91,7 +91,7 @@ class Quote(Base):
     last: Mapped[float | None] = mapped_column(Float)
     bid_size: Mapped[int | None] = mapped_column(Integer)
     ask_size: Mapped[int | None] = mapped_column(Integer)
-    source: Mapped[str] = mapped_column(String(16), default="rest")  # rest | realtime
+    source: Mapped[str] = mapped_column(String(16), default="rest")  # rest | realtime | paper (DB-quote paper echo) | seed
     __table_args__ = (Index("ix_quotes_exchange_ts", "exchange_id", "ts"),)
 
 

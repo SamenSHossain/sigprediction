@@ -21,7 +21,9 @@ Steps (``python scripts/bootstrap_races.py``; see ``--help``):
 5. Save races.yaml and upsert Race / Market rows (``--dry-run`` skips both, ``--no-db`` skips the DB).
 6. Probes: fee presence in the fills sample, relationship-graph emptiness, and the batch-write-count
    probe, which is a *dry* description unless ``--probe-writes`` is passed (then it places a 2-order
-   batch of 1-share YES bids at 0.005 with a 120 s expiry and cancels them; needs the trade key).
+   batch of 1-share YES bids at 0.005 with a 120 s expiry and cancels them). Because those are REAL
+   orders, ``--probe-writes`` refuses (message on stderr, exit code 2) unless LIVE=1 AND the trade key
+   (SIG_API_KEY) are set, whether the script runs directly or through ``sigcup bootstrap``.
 
 The SIG client is imported lazily (it is written concurrently) and everything is coded against
 sigcup.sig.adapter.ExchangeAdapter so tests can inject a fake.
@@ -550,12 +552,36 @@ def pick_probe_markets(markets: Sequence[MarketInfo], prices: Mapping[str, Any] 
     return sorted(open_markets, key=ask, reverse=True)[:n]
 
 
+class ProbeWritesRefused(RuntimeError):
+    """--probe-writes asked for without LIVE=1 and a trade key: no real order may be sent."""
+
+
+def require_probe_writes(sec: Secrets) -> None:
+    """The live-order guard every entry point shares (same rule as ``sigcup.cli.require_live``): the write
+    probe places real orders, so it needs LIVE=1 AND a non-empty SIG_API_KEY. Raises ProbeWritesRefused."""
+    if not sec.live:
+        why = "LIVE is not 1 (set LIVE=1 in .env or the environment)"
+    elif not sec.sig_api_key:
+        why = "SIG_API_KEY is empty (the probe needs the read+trade key)"
+    else:
+        return
+    raise ProbeWritesRefused(f"refusing --probe-writes (it places real orders): {why}")
+
+
 async def probe_batch_writes(
-    adapter: ExchangeAdapter, markets: Sequence[MarketInfo], *, execute: bool, now: datetime | None = None
+    adapter: ExchangeAdapter,
+    markets: Sequence[MarketInfo],
+    *,
+    execute: bool,
+    now: datetime | None = None,
+    sec: Secrets | None = None,
 ) -> dict[str, Any]:
-    """Does POST /orders/batch count as one write? Dry (documented) unless ``execute``."""
+    """Does POST /orders/batch count as one write? Dry (documented) unless ``execute``, which places real
+    orders and therefore raises ProbeWritesRefused unless LIVE=1 and a trade key are set (``sec``, default
+    ``secrets()``), before anything is sent."""
     if not execute:
         return {"verdict": "skipped (dry): pass --probe-writes to place the 2-order probe batch", "procedure": BATCH_PROBE_PROCEDURE}
+    require_probe_writes(sec or load_secrets())
     place_batch = getattr(adapter, "place_batch", None)
     if not callable(place_batch):
         return {"verdict": "adapter has no place_batch; cannot probe", "procedure": BATCH_PROBE_PROCEDURE}
@@ -649,7 +675,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-sig", action="store_true", help="do not call the SIG API (crosswalk / DB only)")
     p.add_argument("--skip-crosswalk", action="store_true", help="do not call Kalshi / Polymarket")
     p.add_argument("--recheck-crosswalk", action="store_true", help="re-verify legs that already have ids")
-    p.add_argument("--probe-writes", action="store_true", help="run the batch-write-count probe (places and cancels 2 tiny orders)")
+    p.add_argument("--probe-writes", action="store_true", help="run the batch-write-count probe (places and cancels 2 tiny REAL orders; needs LIVE=1 and SIG_API_KEY)")
     p.add_argument("--log-level", default="INFO")
     return p
 
@@ -665,6 +691,8 @@ async def run(
 ) -> BootstrapReport:
     cfg = cfg or config()
     sec = sec or load_secrets()
+    if args.probe_writes:
+        require_probe_writes(sec)  # before any client is built or anything is fetched
     now = utc_now()
     report = BootstrapReport()
     data = U.load_races_yaml(args.races_yaml)
@@ -716,7 +744,9 @@ async def run(
                 report.probes["fees"] = await probe_fees(adapter)
                 if rels_ok:
                     report.probes["relationship_graph"] = probe_relationship_graph(relationships, data)
-                report.probes["batch_writes"] = await probe_batch_writes(adapter, markets, execute=bool(args.probe_writes), now=now)
+                report.probes["batch_writes"] = await probe_batch_writes(
+                    adapter, markets, execute=bool(args.probe_writes), now=now, sec=sec
+                )
             finally:
                 if owns_adapter and hasattr(adapter, "aclose"):
                     await adapter.aclose()
@@ -766,7 +796,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     setup_logging(args.log_level)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    report = asyncio.run(run(args))
+    try:
+        report = asyncio.run(run(args))
+    except ProbeWritesRefused as e:
+        print(f"{e}. Run without --probe-writes for the dry description.", file=sys.stderr)
+        return 2
     print(report.text())
     return 0
 

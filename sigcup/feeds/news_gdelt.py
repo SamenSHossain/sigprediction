@@ -17,7 +17,11 @@ partial backfill day and the days before deployment never read as "zero articles
 
 Request budget: requests are serialised with ``asyncio.sleep`` (``GDELT_MIN_INTERVAL_S``) and each
 ``run_once`` handles at most ``max_requests`` races, round-robin via a KV cursor, so a 117-race universe
-is swept in two or three 15-minute cycles rather than blocking one cycle for ten minutes.
+is swept in two or three 15-minute cycles rather than blocking one cycle for ten minutes. A circuit
+breaker ends the run after ``BREAKER_FAILURES`` consecutive connection / proxy / timeout failures (GDELT
+or the path to it is down: the remaining queries would only add 5.2 s waits each and delay every later
+collector); it is logged once, and the races not queried come first in the next run. HTTP answers (429,
+5xx, plain-text errors) mean GDELT is reachable and reset the count.
 """
 
 from __future__ import annotations
@@ -56,6 +60,9 @@ KV_CURSOR = "gdelt:cursor"
 KV_VOLUME_PREFIX = "gdelt:timelinevol:"
 KV_COVERED_SINCE = "gdelt:covered_since"
 MAX_QUERY_TERMS = 6
+BREAKER_FAILURES = 3  # consecutive transport failures that end a run
+# GDELT (or the network path to it) is unreachable: connection / proxy errors and timeouts
+UNREACHABLE_ERRORS: tuple[type[Exception], ...] = (httpx.TimeoutException, httpx.NetworkError, httpx.ProxyError)
 
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -121,10 +128,16 @@ def parse_timelinevol(payload: Any) -> list[tuple[datetime, float]]:
     return out
 
 
-async def fetch_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any | None:
-    """GET and decode; None on any HTTP, network or decode error (GDELT returns plain text on bad queries)."""
+class GdeltUnreachable(Exception):
+    """A request failed at the transport level (connection refused / reset, proxy refusal, timeout)."""
+
+
+async def _get_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any | None:
+    """GET and decode; None on an HTTP or decode error, GdeltUnreachable on a transport failure."""
     try:
         r = await http.get(url, params=params, timeout=HTTP_TIMEOUT_S)
+    except UNREACHABLE_ERRORS as exc:
+        raise GdeltUnreachable(type(exc).__name__) from exc
     except httpx.HTTPError as exc:
         log.warning("gdelt: request failed: %s", type(exc).__name__)
         return None
@@ -141,9 +154,27 @@ async def fetch_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) 
         return None
 
 
-async def fetch_artlist(http: httpx.AsyncClient, base: str, query: str, *, timespan: str = DEFAULT_TIMESPAN, max_records: int = MAX_RECORDS) -> Any | None:
+async def fetch_json(http: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any | None:
+    """GET and decode; None on any HTTP, network or decode error (GDELT returns plain text on bad queries)."""
+    try:
+        return await _get_json(http, url, params)
+    except GdeltUnreachable as exc:
+        log.warning("gdelt: request failed: %s", exc)
+        return None
+
+
+async def fetch_artlist(
+    http: httpx.AsyncClient,
+    base: str,
+    query: str,
+    *,
+    timespan: str = DEFAULT_TIMESPAN,
+    max_records: int = MAX_RECORDS,
+    strict: bool = False,
+) -> Any | None:
+    """``strict`` raises GdeltUnreachable on a transport failure instead of returning None."""
     params = {"query": query, "mode": "artlist", "format": "json", "maxrecords": int(max_records), "timespan": timespan, "sort": "datedesc"}
-    return await fetch_json(http, base, params)
+    return await (_get_json if strict else fetch_json)(http, base, params)
 
 
 async def fetch_timelinevol(http: httpx.AsyncClient, base: str, query: str, *, timespan: str = "7d") -> Any | None:
@@ -208,16 +239,35 @@ async def collect(
     sleep: Sleep = asyncio.sleep,
     now: datetime | None = None,
     succeeded: list[str] | None = None,
+    attempted: list[str] | None = None,
+    breaker_failures: int = BREAKER_FAILURES,
 ) -> list[PostDraft]:
     """Run the artlist queries serially, ``min_interval_s`` apart, and normalise the articles.
 
-    Race ids whose query answered are appended to ``succeeded`` when given.
+    Stops early (circuit breaker, logged once) after ``breaker_failures`` consecutive connection / proxy /
+    timeout failures. Race ids whose query was sent are appended to ``attempted`` and those whose query
+    answered to ``succeeded`` when given.
     """
     drafts: list[PostDraft] = []
+    failures = 0
     for i, (rid, query) in enumerate(jobs):
         if i:
             await sleep(min_interval_s)
-        payload = await fetch_artlist(http, cfg.feeds.gdelt_doc, query, timespan=timespan)
+        if attempted is not None:
+            attempted.append(rid)
+        try:
+            payload = await fetch_artlist(http, cfg.feeds.gdelt_doc, query, timespan=timespan, strict=True)
+        except GdeltUnreachable as exc:
+            failures += 1
+            log.warning("gdelt: request failed: %s", exc)
+            if failures >= breaker_failures:
+                log.warning(
+                    "gdelt: circuit breaker open after %d consecutive connection failures (%s); skipping the other %d queries this run",
+                    failures, exc, len(jobs) - i - 1,
+                )
+                break
+            continue
+        failures = 0  # GDELT answered (even with an error status): it is reachable
         if payload is None:
             continue
         if succeeded is not None:
@@ -247,16 +297,18 @@ async def run_once(
         return 0
     with session_factory() as s:
         cursor = int(kv_get(s, KV_CURSOR, 0) or 0)
-    jobs, next_cursor = _slice(queue, cursor, max_requests)
+    jobs, _ = _slice(queue, cursor, max_requests)
     owns = http is None
     client = http or httpx.AsyncClient(headers={"User-Agent": "sigcup/0.1 (+research)"})
     succeeded: list[str] = []
+    attempted: list[str] = []
     try:
-        drafts = await collect(client, cfg, jobs, timespan=timespan, sleep=sleep, now=now, succeeded=succeeded)
+        drafts = await collect(client, cfg, jobs, timespan=timespan, sleep=sleep, now=now, succeeded=succeeded, attempted=attempted)
     finally:
         if owns:
             await client.aclose()
     n = await write_posts_async(session_factory, drafts, gazetteer, require_link=True, now=now)
+    next_cursor = (cursor + len(attempted)) % len(queue)  # a tripped breaker leaves the rest for next run
     with session_factory() as s:
         kv_set(s, KV_CURSOR, next_cursor)
         covered = dict(kv_get(s, KV_COVERED_SINCE) or {})
@@ -264,7 +316,7 @@ async def run_once(
         new = {rid: first for rid in succeeded if rid not in covered}
         if new:
             kv_set(s, KV_COVERED_SINCE, {**covered, **new})
-    log.info("gdelt: %d races queried, %d articles, %d new posts", len(jobs), len(drafts), n)
+    log.info("gdelt: %d races queried, %d articles, %d new posts", len(attempted), len(drafts), n)
     return n
 
 

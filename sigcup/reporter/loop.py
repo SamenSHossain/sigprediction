@@ -184,7 +184,7 @@ async def run(*, once: bool = False, cfg: StrategyConfig | None = None, sec: Sec
 
 
 def main(once: bool = False) -> int:
-    """Synchronous entry for the CLI / pm2 (`python -m sigcup.cli report loop`)."""
+    """Synchronous entry for the CLI / pm2 (`sigcup report loop`)."""
     asyncio.run(run(once=once))
     return 0
 

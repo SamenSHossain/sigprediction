@@ -162,20 +162,24 @@ async def test_realtime_consumer_and_budget_are_wired(db, cfg, tmp_path):
 
 
 async def test_start_realtime_builds_feed_with_market_ids(db, cfg, tmp_path, monkeypatch):
+    """The loop hands the REAL RealtimeFeed a market id -> exchange id mapping: it subscribes to the
+    market-id topics and attributes topic-only events back to the right exchange id. (This test used to
+    assert the inverted exchange id -> market id dict against a stand-in feed.)"""
+    from sigcup.sig import realtime as real_rt
+
     clock = FakeClock()
     seed(clock)
     built = {}
 
-    class FakeFeed:
+    class FakeFeed(real_rt.RealtimeFeed):
+        """The real feed (mapping, topics, parsing); only the network loop is replaced."""
+
         def __init__(self, token_provider, tournament_id, *, markets=None, max_channels=None, **kw):
+            super().__init__(token_provider, tournament_id, markets=markets, max_channels=max_channels, **kw)
             built.update(token_provider=token_provider, tournament_id=tournament_id, markets=markets, max_channels=max_channels)
-            self.stopped = False
 
         async def events(self):
             yield type("Upd", (), {"exchange_id": "tx-d", "bids": [(0.61, 10)], "asks": [(0.63, 10)], "ts": None})()
-
-        def stop(self):
-            self.stopped = True
 
     rt = ModuleType("sigcup.sig.realtime")
     rt.RealtimeFeed = FakeFeed
@@ -192,5 +196,13 @@ async def test_start_realtime_builds_feed_with_market_ids(db, cfg, tmp_path, mon
     assert t.start_realtime() is True
     await t._realtime_task
     assert built["tournament_id"] == "t-fake" and built["max_channels"] == cfg.limits.realtime_channels
-    assert built["markets"]["tx-d"] == "1" and built["token_provider"] is token
+    assert built["token_provider"] is token
+    # market id -> exchange id, as RealtimeFeed documents (the seeded markets: 1 -> tx-d, 2 -> tx-r)
+    assert built["markets"] == {"1": "tx-d", "2": "tx-r"}
+    feed = t._realtime_feed
+    assert sorted(feed.topics()) == ["realtime:tournament:t-fake:market:1", "realtime:tournament:t-fake:market:2"]
+    assert not any("tx-d" in topic or "tx-r" in topic for topic in feed.topics())
+    # a topic-only event on market 1's channel is attributed to exchange tx-d
+    (ev,) = real_rt.parse_broadcast("book_dirty", {}, topic="realtime:tournament:t-fake:market:1", markets=feed.markets)
+    assert ev.exchange_id == "tx-d" and ev.market_id == "1"
     assert t.book.top("tx-d").ask == 0.63 and t.book.top("tx-d").source == "realtime"

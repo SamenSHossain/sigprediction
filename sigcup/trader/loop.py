@@ -48,6 +48,7 @@ STARTUP_RETRY_S = 5.0
 STARTUP_RETRY_MAX_S = 60.0
 BULK_CHUNK = 100  # /exchanges/prices accepts <= 100 ids per read
 DEPTH_PER_PASS = 4  # depth reads per bulk pass (bounded: reads are shared with everything else)
+PAPER_QUOTE_SOURCE = "paper"  # Quote.source of the rows a DB-quote paper trader echoes back
 
 _modules: dict[str, ModuleType | None] = {}
 
@@ -202,7 +203,8 @@ class Trader:
             log.warning("realtime: tournament id unknown; REST only")
             return False
         ids = self.book.hot_markets(self.cfg.limits.realtime_channels)
-        markets = {eid: (self.book.meta[eid].market_id if eid in self.book.meta else None) for eid in ids}
+        # RealtimeFeed takes MARKET id -> exchange id (topics are per market id); unmapped books have no topic
+        markets = {self.book.meta[eid].market_id: eid for eid in ids if eid in self.book.meta and self.book.meta[eid].market_id}
         try:
             feed = mod.RealtimeFeed(self.adapter.realtime_token, str(tid), markets=markets, max_channels=self.cfg.limits.realtime_channels)
             self._realtime_feed = feed
@@ -527,6 +529,8 @@ def build_trader(
     elif live and not sec.sig_api_key:
         raise RuntimeError("LIVE=1 but SIG_API_KEY is empty: refusing to start the live trader")
     book = BookState(cfg)
+    if getattr(adapter, "use_db_quotes", False) is True:
+        book.persist_source = PAPER_QUOTE_SOURCE  # the paper adapter serves the quotes table back: label the echoes
     try:
         book.load_meta()
     except Exception as e:  # noqa: BLE001
@@ -557,7 +561,7 @@ async def run(
 
 
 def main(paper: bool = False, once: bool = False) -> None:
-    """Synchronous entry for the CLI / pm2 (`python -m sigcup.cli trade`)."""
+    """Synchronous entry for the CLI / pm2 (`sigcup trade`, paper unless LIVE=1)."""
     asyncio.run(run(paper=paper, once=once))
 
 

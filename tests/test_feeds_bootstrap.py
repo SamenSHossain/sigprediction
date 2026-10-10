@@ -336,7 +336,9 @@ async def test_probe_batch_writes_dry_and_executed():
     fake = FakeAdapter()
     dry = await B.probe_batch_writes(fake, fake.markets, execute=False)
     assert dry["verdict"].startswith("skipped") and "procedure" in dry and fake.placed == []
-    out = await B.probe_batch_writes(fake, fake.markets, execute=True, now=NOW)
+    # executing places real orders: only with LIVE=1 and a trade key (the refusals: test_feeds_fix_probe_gate.py)
+    live = Secrets(_env_file=None, live=True, sig_api_key="trade-key")
+    out = await B.probe_batch_writes(fake, fake.markets, execute=True, now=NOW, sec=live)
     assert len(fake.placed) == 2 and fake.cancelled == ["o-0", "o-1"]
     req = fake.placed[0]
     assert (req.exchange_id, req.side, req.action, req.price, req.quantity) == ("1101", "yes", "buy", 0.005, 1)  # highest ask first

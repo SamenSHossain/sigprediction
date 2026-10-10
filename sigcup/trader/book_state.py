@@ -179,6 +179,10 @@ class BookState:
     reserved: float = 0.0
     positions_value: float = 0.0
     last_bulk_at: datetime | None = None
+    # Quote.source for persisted rows, overriding the update path ('rest' / 'realtime'). The trader sets
+    # 'paper' when the PaperAdapter serves the quotes table back (DB-quote mode): those rows are echoes,
+    # never real exchange quotes, and must not pass for 'rest'.
+    persist_source: str | None = None
     _pending_quotes: list[Quote] = field(default_factory=list, repr=False)
 
     # -- metadata ----------------------------------------------------------------------------
@@ -456,7 +460,7 @@ class BookState:
                 last=top.last,
                 bid_size=top.bid_size,
                 ask_size=top.ask_size,
-                source=top.source,
+                source=self.persist_source or top.source,
             )
         )
 
