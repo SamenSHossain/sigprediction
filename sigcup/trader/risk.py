@@ -1,6 +1,21 @@
 """Sizing and limits.
 
 - kelly_fraction(fair, price, long) for a binary contract; fractional multipliers per strategy.
+- Kelly sizing (``apply``): every theta / value / convex / fade / follow order that states the fair value it
+  was priced on (``DesiredOrder.fair``, the YES probability signals took from ``ctx.fair`` via
+  ``signals.trade_fair``) is re-sized to its fractional-Kelly target: stake = ``kelly_fraction(fair, price,
+  side) * multiplier * equity`` with multiplier ``kelly_fraction_theta`` for theta on a favourite whose fair
+  is >= ``THETA_KELLY_MIN_FAIR`` (0.90; theta's fair is capped at ``theta.fair_cap`` like its yield),
+  ``kelly_fraction_default`` for lower theta and for value / fade / follow, ``convex_sleeve.kelly_fraction``
+  for convex; shares = floor(stake / cost per share) less what the market already holds in the same
+  direction (position, resting orders this set does not re-emit, and better-ranked orders of this set).
+  Convex never exceeds the quantity signals sized from the sleeve budget. Below one share the order is
+  dropped. The signal's own quantity is a placeholder for these strategies. Arb and election takes
+  (depth-bounded), mm (``mm.size``) and orders without a fair keep their quantity. Every cap below then
+  applies on top.
+- Ranking: within a priority (take first) theta orders are served by yield ``min(fair, fair_cap) / price - 1``
+  and value / convex / fade / follow by ``|edge|``, best first, for the position cap, the cash budget and
+  the output order (the OMS keeps that order within a priority).
 - Caps: per race (netted across party legs: +YES on D == -YES on R economically), per state, reserve
   (liquid_reserve_frac, higher in the final 72 h), max position shares.
 - Stress: uniform national swing of risk.national_swing_pts through the T-distribution fair-value map must
@@ -40,6 +55,13 @@ log = get_logger(__name__)
 _EPS = 1e-9
 _OTHER = "__other__"  # outcome: none of the listed party legs wins (independent / N-A)
 _OPEN_STATUSES = {"open", "active", "trading", ""}
+# theta uses kelly_fraction_theta only on favourites at least this likely (else kelly_fraction_default);
+# overridable as ``risk.kelly_theta_min_fair`` once settings.Risk carries it
+THETA_KELLY_MIN_FAIR = 0.90
+KELLY_SIZED = frozenset(
+    {Strategy.THETA.value, Strategy.VALUE.value, Strategy.CONVEX.value, Strategy.FADE.value, Strategy.FOLLOW.value}
+)
+_EDGE_RANKED = frozenset({Strategy.VALUE.value, Strategy.CONVEX.value, Strategy.FADE.value, Strategy.FOLLOW.value})
 
 
 # -- Kelly and pricing ------------------------------------------------------------------------
@@ -63,9 +85,13 @@ def kelly_fraction(fair: float, price: float, long: bool = True) -> float:
     return max(0.0, f)
 
 
+def _strategy_name(strategy: object) -> str:
+    return str(getattr(strategy, "value", strategy)).lower()
+
+
 def strategy_multiplier(strategy: Strategy | str, cfg: StrategyConfig) -> float:
     """Fractional-Kelly multiplier for a strategy tag."""
-    s = str(getattr(strategy, "value", strategy)).lower()
+    s = _strategy_name(strategy)
     if s in (Strategy.ARB.value, Strategy.ELECTION.value):
         return cfg.risk.kelly_fraction_arb
     if s == Strategy.THETA.value:
@@ -92,6 +118,66 @@ def kelly_size(
     if cost <= 0:
         return 0
     return int(f * bankroll / cost + 1e-6)
+
+
+def kelly_multiplier(strategy: Strategy | str, fair_side: float, cfg: StrategyConfig) -> float:
+    """Multiplier ``apply`` sizes an order with: ``strategy_multiplier``, except that theta on a favourite whose
+    own-side fair is below ``THETA_KELLY_MIN_FAIR`` gets ``kelly_fraction_default``."""
+    if _strategy_name(strategy) == Strategy.THETA.value:
+        min_fair = float(getattr(cfg.risk, "kelly_theta_min_fair", THETA_KELLY_MIN_FAIR))
+        if fair_side < min_fair - _EPS:
+            return cfg.risk.kelly_fraction_default
+    return strategy_multiplier(strategy, cfg)
+
+
+def _side_fair(d: DesiredOrder, cfg: StrategyConfig) -> tuple[float, float] | None:
+    """(fair YES probability, fair of the side the order is long) for ``d``; theta capped at ``fair_cap``."""
+    if d.fair is None:
+        return None
+    fair_yes = min(1.0, max(0.0, float(d.fair)))
+    long = d.is_long_yes
+    fair_side = fair_yes if long else 1.0 - fair_yes
+    if _strategy_name(d.strategy) == Strategy.THETA.value:
+        fair_side = min(fair_side, float(cfg.theta.fair_cap))
+        fair_yes = fair_side if long else 1.0 - fair_side
+    return fair_yes, fair_side
+
+
+def order_kelly_target(d: DesiredOrder, bankroll: float, cfg: StrategyConfig) -> int | None:
+    """Fractional-Kelly target position (shares, on ``d``'s side) for a Kelly-sized order, or None when ``d`` is
+    not Kelly-sized (arb, election, mm, manual, or no stated ``fair``)."""
+    if _strategy_name(d.strategy) not in KELLY_SIZED:
+        return None
+    fairs = _side_fair(d, cfg)
+    if fairs is None:
+        return None
+    fair_yes, fair_side = fairs
+    long = d.is_long_yes
+    yes_price = _yes_price(d)
+    cost = yes_price if long else 1.0 - yes_price
+    f = kelly_fraction(fair_yes, yes_price, long) * kelly_multiplier(d.strategy, fair_side, cfg)
+    if f <= 0 or bankroll <= 0 or cost <= 0:
+        return 0
+    return int(f * bankroll / cost + 1e-6)
+
+
+def rank_score(d: DesiredOrder, cfg: StrategyConfig) -> float:
+    """Best-first score within a priority: theta by yield ``min(fair, fair_cap) / price - 1``, value / convex /
+    fade / follow by ``|edge|``; 0 for everything else (kept in input order)."""
+    s = _strategy_name(d.strategy)
+    if s == Strategy.THETA.value:
+        fairs = _side_fair(d, cfg)
+        yes_price = _yes_price(d)
+        cost = yes_price if d.is_long_yes else 1.0 - yes_price
+        if fairs is None or cost <= 0:
+            return 0.0
+        return fairs[1] / cost - 1.0
+    if s in _EDGE_RANKED:
+        if d.edge is not None:
+            return abs(float(d.edge))
+        if d.fair is not None:
+            return abs(float(d.fair) - _yes_price(d))
+    return 0.0
 
 
 def theta_bid(fair: float | None, ask: float | None, cfg: StrategyConfig) -> float | None:
@@ -393,6 +479,7 @@ class _Cand:
     factor: float = 1.0
     reducer: bool = False  # closes or shrinks an existing position: exempt from scaling
     dropped: str | None = None
+    score: float = 0.0  # rank_score: best first within a priority
 
     @property
     def quantity(self) -> int:
@@ -401,6 +488,55 @@ class _Cand:
     @property
     def alive(self) -> bool:
         return self.dropped is None and self.quantity > 0
+
+    @property
+    def rank(self) -> tuple[int, int, float, int]:
+        """Priority, take first, best score first, then input order."""
+        return (self.order.priority, 0 if self.order.take else 1, -self.score, self.seq)
+
+
+def _resting_by_direction(ctx: TraderContext, exclude: Collection[int]) -> dict[tuple[str, bool], float]:
+    """Remaining quantity of resting intents (less ``exclude``) per (market, long YES?)."""
+    out: dict[tuple[str, bool], float] = {}
+    for eid, mv in ctx.markets.items():
+        for intent in mv.open_orders or []:
+            if id(intent) in exclude:
+                continue
+            remaining = max(0, int(getattr(intent, "quantity", 0)) - int(getattr(intent, "filled_qty", 0) or 0))
+            if remaining <= 0:
+                continue
+            long_yes = (getattr(intent, "side", "yes") == "yes") == (getattr(intent, "action", "buy") == "buy")
+            out[(eid, long_yes)] = out.get((eid, long_yes), 0.0) + remaining
+    return out
+
+
+def _kelly_resize(ctx: TraderContext, cands: list[_Cand], skip: Collection[int]) -> None:
+    """Replace each Kelly-sized candidate's quantity by its fractional-Kelly increment (best-ranked first):
+    the target less the market's same-direction position, its resting orders that this set does not re-emit
+    and the quantity already given to better-ranked candidates on the same market and direction. Convex
+    keeps the signal's sleeve-sized quantity as a ceiling. Increments below one share are dropped."""
+    equity = max(0.0, float(ctx.equity))
+    resting = _resting_by_direction(ctx, skip)
+    held: dict[tuple[str, bool], float] = {}
+    for c in sorted(cands, key=lambda c: c.rank):
+        if c.dropped is not None:
+            continue
+        d = c.order
+        target = order_kelly_target(d, equity, ctx.cfg)
+        if target is None:
+            continue
+        key = (d.exchange_id, d.is_long_yes)
+        if key not in held:
+            pos = _position(ctx, d.exchange_id)
+            held[key] = (max(0, pos) if d.is_long_yes else max(0, -pos)) + resting.get(key, 0.0)
+        qty = int(target - held[key] + 1e-9)
+        if _strategy_name(d.strategy) == Strategy.CONVEX.value:
+            qty = min(qty, int(d.quantity))  # the sleeve budget signals sized it from
+        if qty < 1:
+            c.dropped = "kelly: no edge" if target < 1 else "kelly: target held"
+            continue
+        c.order = replace(d, quantity=qty)
+        held[key] += qty
 
 
 def _settle_groups(cands: list[_Cand], reason: str) -> None:
@@ -478,10 +614,11 @@ def _state_of(ctx: TraderContext, exchange_id: str) -> str | None:
 
 
 def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]:
-    """Scale / filter the desired order set against every limit. Honours ``priority`` (lower first) and
-    ``take`` (first within a priority), keeps or drops multi-leg ``group_id`` sets whole, never touches
-    existing positions, and exempts position-reducing orders from scaling. Returns new DesiredOrder
-    objects with tick-rounded prices, sorted by priority."""
+    """Size, scale and filter the desired order set against every limit. Kelly-sizes theta / value / convex /
+    fade / follow orders that carry a ``fair`` (see the module docstring), honours ``priority`` (lower first),
+    ``take`` (first within a priority) and the rank score (best first within that), keeps or drops multi-leg
+    ``group_id`` sets whole, never touches existing positions, and exempts position-reducing orders from
+    scaling. Returns new DesiredOrder objects with tick-rounded prices, in that order."""
     cfg = ctx.cfg
     bankroll = ctx.bankroll_start if ctx.bankroll_start > 0 else max(ctx.equity, 1.0)
     skip = superseded_resting(ctx, desired)  # target semantics: never charge a re-emitted order twice
@@ -489,27 +626,28 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
     cands: list[_Cand] = []
     for seq, d in enumerate(desired):
         d2 = replace(d, price=round_tick(d.price), quantity=int(d.quantity))
-        c = _Cand(order=d2, seq=seq)
+        c = _Cand(order=d2, seq=seq, score=rank_score(d2, cfg))
         mv = ctx.markets.get(d2.exchange_id)
-        pos = mv.position if mv else 0
         if d2.quantity <= 0:
             c.dropped = "zero quantity"
         elif mv is not None and (mv.status or "open").lower() not in _OPEN_STATUSES:
             c.dropped = f"market status {mv.status}"
         elif ctx.hours_to_deadline <= 0:
             c.dropped = "past deadline"
-        c.reducer = (pos > 0 and not d2.is_long_yes and d2.quantity <= pos) or (
-            pos < 0 and d2.is_long_yes and d2.quantity <= -pos
-        )
         cands.append(c)
+    _kelly_resize(ctx, cands, skip)
+    for c in cands:
+        pos = _position(ctx, c.order.exchange_id)
+        q = c.order.quantity
+        c.reducer = (pos > 0 and not c.order.is_long_yes and q <= pos) or (pos < 0 and c.order.is_long_yes and q <= -pos)
     if daily_loss_breached(ctx):
         for c in cands:
             if c.dropped is None and not c.reducer:
                 c.dropped = "daily loss limit"
 
-    # 1. per-market position cap (candidates on the same market share the room, in priority order)
+    # 1. per-market position cap (candidates on the same market share the room, in rank order)
     used: dict[str, float] = {}
-    for c in sorted(cands, key=lambda c: (c.order.priority, 0 if c.order.take else 1, c.seq)):
+    for c in sorted(cands, key=lambda c: c.rank):
         if c.dropped is not None or c.reducer:
             continue
         eid = c.order.exchange_id
@@ -567,11 +705,8 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
             _scale(live, f, "swing_stress")
             _settle_groups(cands, "swing_stress")
 
-    # 5. reserve / free cash, walking in priority order (take first within a priority)
-    ranked = sorted(
-        (c for c in cands if c.alive),
-        key=lambda c: (c.order.priority, 0 if c.order.take else 1, c.seq),
-    )
+    # 5. reserve / free cash, walking in rank order (take first, then best yield / edge, within a priority)
+    ranked = sorted((c for c in cands if c.alive), key=lambda c: c.rank)
     reserved = max(0.0, ctx.reserved - _resting_reservation(ctx, skip))
     free = ctx.cash - reserved - reserve_amount(ctx)
     seen_groups: set[str] = set()
@@ -603,7 +738,7 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         free -= cash_required(c.order, _position(ctx, c.order.exchange_id), c.quantity)
 
     out: list[DesiredOrder] = []
-    for c in cands:
+    for c in sorted(cands, key=lambda c: c.rank):
         if c.dropped is not None:
             log.debug(
                 "risk: drop %s %s %s %s @%.3f x%d (%s)",
@@ -614,5 +749,4 @@ def apply(ctx: TraderContext, desired: list[DesiredOrder]) -> list[DesiredOrder]
         if c.quantity <= 0:
             continue
         out.append(replace(c.order, quantity=c.quantity))
-    out.sort(key=lambda d: (d.priority, 0 if d.take else 1))
     return out

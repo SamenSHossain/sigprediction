@@ -15,6 +15,12 @@ Kill switch: ``sigcup kill`` touches the kill file AND sets the database kill fl
 live trader, ``killed:paper`` for the paper one), so a trader that is (re)started afterwards begins
 killed: its startup reconcile cancels what is open and re-sends nothing. ``trade`` sets the same flag
 when it finds the kill file. ``kill --clear`` removes both.
+
+One limiter: the trader holds ``trader.lock`` (next to the kill file, ``data/trader.lock`` by default) while
+it runs. ``canary`` and ``bootstrap --probe-writes`` build their own limiter, so they refuse (exit 2) while a
+LIVE trader holds the lock (a paper trader, as in the runbook's canary step, or a stale lock does not
+block them); ``kill --cancel-now`` is the emergency path and only warns. A second ``trade`` refuses while
+another trader holds the lock.
 """
 
 from __future__ import annotations
@@ -127,6 +133,33 @@ def require_live(sec: Secrets, action: str) -> None:
     ok, why = live_allowed(sec)
     if not ok:
         fail(f"refusing {action}: {why}. Paper mode needs no key (LIVE unset or 0, or pass --paper).")
+
+
+def trader_lock_holder(sec: Secrets) -> Any | None:
+    """The lock of a running trader (``sigcup.trader.loop.running_trader``), None when there is none or the
+    check itself is unavailable (a trader module that cannot be imported cannot be running either)."""
+    try:
+        mod = importlib.import_module("sigcup.trader.loop")
+        return mod.running_trader(sec)
+    except Exception as e:  # noqa: BLE001
+        log.warning("trader lock check unavailable: %s: %s", type(e).__name__, e)
+        return None
+
+
+def require_no_live_trader(sec: Secrets, action: str) -> None:
+    """Refuse a command that builds its own exchange limiter while a LIVE trader runs (a lock without a
+    mode counts as live). A paper trader does not block it (the runbook runs canaries beside one)."""
+    holder = trader_lock_holder(sec)
+    if holder is None:
+        return
+    if getattr(holder, "mode", None) == "paper":
+        console.print(f"note: a paper trader (pid {holder.pid}) is running; it sends no orders")
+        return
+    fail(
+        f"refusing {action}: a live trader (pid {holder.pid}) holds {holder.path}. It owns the account's "
+        "exchange budget (30 writes + 100 reads per minute) and this command would add its own limiter on top. "
+        "Stop it first (`pm2 stop trader`), or remove the lock file if no trader is running."
+    )
 
 
 def _kill_secrets() -> Secrets:
@@ -253,6 +286,7 @@ def bootstrap(
     passthrough_probe = any(_is_probe_writes(a) for a in extra)  # `sigcup bootstrap -- --probe-writes`
     if probe_writes or passthrough_probe:
         require_live(sec, "--probe-writes (it places real orders)")
+        require_no_live_trader(sec, "--probe-writes")
     mod = load_script("bootstrap_races", what="the bootstrap script")
     main = getattr(mod, "main", None)
     if main is None:
@@ -283,7 +317,12 @@ def trade(
             log.warning("could not set the kill flag in the database: %s", e)
     run = load_entry("sigcup.trader.loop", "run", what="the trader")
     console.print(f"trader: mode={'LIVE' if not paper else 'paper'} once={once}")
-    result = run_async(run(paper=paper, once=once))
+    try:
+        result = run_async(run(paper=paper, once=once))
+    except Exception as e:
+        if type(e).__name__ == "TraderLockHeld":  # another trader runs: one process owns the exchange budget
+            fail(str(e))
+        raise
     if once and result is not None:
         console.print(_summarise_cycle(result))
 
@@ -455,6 +494,12 @@ def kill(
         log.warning("status check after kill failed: %s", e)
     if cancel_now:
         require_live(sec, "--cancel-now")
+        holder = trader_lock_holder(sec)
+        if holder is not None:  # the emergency path is never refused, but it adds a second limiter
+            err_console.print(
+                f"[yellow]warning:[/yellow] a {holder.mode or 'live'} trader (pid {holder.pid}) is running: --cancel-now uses its own "
+                "limiter beside it (one cancel-all write); the account's shared exchange limits may be briefly exceeded"
+            )
         n = run_async(_cancel_all_direct(sec, settings.config()))
         console.print(f"cancel-all: exchange cancelled {n} orders")
 
@@ -732,6 +777,7 @@ def canary(
         require_live(sec, "a live canary")
         if sec.kill_path.exists():
             fail(f"kill file present at {sec.kill_path}: clear it first (`sigcup kill --clear`)")
+    require_no_live_trader(sec, "the canary")
     _init_db()
     exchange_id, title = _pick_market(market)
     adapter = build_adapter(sec, cfg, live=live)

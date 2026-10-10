@@ -79,20 +79,31 @@ async def test_cycle_writes_one_signal_per_accepted_order(db, cfg, tmp_path, mon
     install_models(monkeypatch, generate)
     clock = FakeClock()
     t = await make_trader(cfg, tmp_path, clock)
+    accepted: list[DesiredOrder] = []
+    real_apply = trader_loop.risk.apply
+
+    def spy(ctx, desired):
+        out = real_apply(ctx, desired)
+        accepted.extend(out)
+        return out
+
+    monkeypatch.setattr(trader_loop.risk, "apply", spy)
     res = await t.model_cycle()
     assert res.skipped is None and res.accepted == 2
     rows = signal_rows()
     assert len(rows) == 2 == res.signals
     by = {(r.exchange_id, r.strategy): r for r in rows}
+    sizes = {(d.exchange_id, d.strategy.value): d.quantity for d in accepted}
     v = by[("tx-d", "value")]
-    assert v.fair == pytest.approx(0.70) and v.price == pytest.approx(0.60) and v.edge == pytest.approx(0.10) and v.size == 100
+    assert v.fair == pytest.approx(0.70) and v.price == pytest.approx(0.60) and v.edge == pytest.approx(0.10)
+    assert v.size == sizes[("tx-d", "value")] > 0, "the size that survived risk"
     assert v.ts is not None
     assert v.meta["components"] == {"ref": pytest.approx(0.71), "polls": pytest.approx(0.66)}
     assert v.meta["side"] == "yes" and v.meta["action"] == "buy"
     th = by[("tx-r", "theta")]
     # fair is P(YES); price is stored in the same YES units (a NO bought at 0.64 is a YES at 0.36)
     assert th.fair == pytest.approx(0.30) and th.price == pytest.approx(0.36) and th.meta["order_price"] == pytest.approx(0.64)
-    assert th.meta["side"] == "no" and th.size == 50
+    assert th.meta["side"] == "no" and th.size == sizes[("tx-r", "theta")]
 
 
 async def test_second_cycle_within_ten_minutes_does_not_duplicate(db, cfg, tmp_path, monkeypatch):

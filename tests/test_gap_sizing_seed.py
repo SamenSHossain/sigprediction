@@ -108,6 +108,23 @@ def test_fundamentals_only_fair_value_does_not_trade(db, cfg):
     assert _resting(SG.generate(c, [])) == []
 
 
+def test_rating_age_limit_matches_fairvalue_and_seed_source_is_manual():
+    from sigcup.trader import fairvalue
+
+    assert SG.RATING_MAX_AGE == fairvalue.RATING_MAX_AGE
+    assert "manual" in SG.SEED_RATING_SOURCES and "cook" not in SG.SEED_RATING_SOURCES
+
+
+def test_control_market_without_a_reference_does_not_trade(db, cfg):
+    info = race("CONTROL-SENATE", "control", None)
+    views = [view(info, "D", bid=0.39, ask=0.41), view(info, "R", bid=0.57, ask=0.59)]
+    fairs = [
+        FairValue(exchange_id="CONTROL-SENATE-D", fair=0.55, sd=0.03, components={"sim": 0.55}, weights={"sim": 1.0}, ts=NOW),
+        FairValue(exchange_id="CONTROL-SENATE-R", fair=0.45, sd=0.03, components={"sim": 0.45}, weights={"sim": 1.0}, ts=NOW),
+    ]
+    assert _resting(SG.generate(ctx(cfg, [info], views, fairs), [])) == []
+
+
 def test_unreadable_ratings_table_means_no_trading_without_a_reference(db, cfg, monkeypatch):
     @contextmanager
     def broken():

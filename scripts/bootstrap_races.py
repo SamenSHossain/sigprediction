@@ -23,7 +23,9 @@ Steps (``python scripts/bootstrap_races.py``; see ``--help``):
    probe, which is a *dry* description unless ``--probe-writes`` is passed (then it places a 2-order
    batch of 1-share YES bids at 0.005 with a 120 s expiry and cancels them). Because those are REAL
    orders, ``--probe-writes`` refuses (message on stderr, exit code 2) unless LIVE=1 AND the trade key
-   (SIG_API_KEY) are set, whether the script runs directly or through ``sigcup bootstrap``.
+   (SIG_API_KEY) are set, whether the script runs directly or through ``sigcup bootstrap``. It also
+   refuses while a live trader holds the trader lock (``data/trader.lock``): this script builds its own
+   limiter, and probing beside the trader could exceed the account's exchange limits.
 
 The SIG client is imported lazily (it is written concurrently) and everything is coded against
 sigcup.sig.adapter.ExchangeAdapter so tests can inject a fake.
@@ -556,15 +558,37 @@ class ProbeWritesRefused(RuntimeError):
     """--probe-writes asked for without LIVE=1 and a trade key: no real order may be sent."""
 
 
+def live_trader_lock(sec: Secrets) -> Any | None:
+    """The lock of a running LIVE trader (``sigcup.trader.loop.running_trader``; a lock without a mode counts
+    as live), else None. None too when the check cannot be imported (then no trader can be running)."""
+    try:
+        from sigcup.trader.loop import running_trader
+    except Exception as e:  # noqa: BLE001
+        log.warning("trader lock check unavailable: %s: %s", type(e).__name__, e)
+        return None
+    holder = running_trader(sec)
+    if holder is None or getattr(holder, "mode", None) == "paper":
+        return None
+    return holder
+
+
 def require_probe_writes(sec: Secrets) -> None:
     """The live-order guard every entry point shares (same rule as ``sigcup.cli.require_live``): the write
-    probe places real orders, so it needs LIVE=1 AND a non-empty SIG_API_KEY. Raises ProbeWritesRefused."""
+    probe places real orders, so it needs LIVE=1 AND a non-empty SIG_API_KEY, and (like ``sigcup.cli.
+    require_no_live_trader``) no live trader may hold the trader lock: this script builds its own limiter,
+    so probing beside the trader could exceed the account's exchange limits. Raises ProbeWritesRefused."""
     if not sec.live:
         why = "LIVE is not 1 (set LIVE=1 in .env or the environment)"
     elif not sec.sig_api_key:
         why = "SIG_API_KEY is empty (the probe needs the read+trade key)"
     else:
-        return
+        holder = live_trader_lock(sec)
+        if holder is None:
+            return
+        raise ProbeWritesRefused(
+            f"refusing --probe-writes: a live trader (pid {holder.pid}) holds {holder.path} and owns the account's "
+            "exchange budget; this script would add its own limiter on top. Stop it first (`pm2 stop trader`)"
+        )
     raise ProbeWritesRefused(f"refusing --probe-writes (it places real orders): {why}")
 
 

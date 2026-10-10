@@ -12,6 +12,14 @@ Rules
   of the model against SIG, and on election night results move the real-money price first; the taker rule
   (``election_night.taker_orders``, added by the loop) is the election-night strategy. Working orders of
   the other strategies are no longer desired, so the OMS cancels them.
+* Grounding: theta / value / convex trade a market only when its fair value rests on something real: a
+  ``ref`` component (real-money price), or a ``ratings`` component for a race that has a rating from a
+  published source (any source except ``SEED_RATING_SOURCES``, i.e. ``manual``, which is how the "seed guess"
+  placeholders in config/ratings_manual.yaml are stored) no older than ``RATING_MAX_AGE``. The polls
+  component alone is the PVI / generic-ballot prior, a guess too, and a control market's ``sim`` component
+  is built on the seat fairs, so control markets need a reference. FairValue does not record which rating
+  sources fed it, so the published set is read from the Rating table (once per ``generate``, only when some
+  fair value lacks a reference); if it cannot be read, only reference-backed fair values trade.
 * Trade fair: the fair value the resting strategies act on. Normally ``FairValue.fair`` and ``.sd``. While
   a confident hard Event for the race is < 24 h old the slow components (polls, ratings) cannot have seen
   it: the fair is the reference component alone, used only when ``FairValue.ts`` (the freshest input,
@@ -29,6 +37,9 @@ Rules
   (an ACKED theta order) or hold is kept unless another beats its yield by more than
   ``THETA_SWITCH_MARGIN``; otherwise candidates within that margin of the best go to a YES leg (the
   favourite's own market).
+* Ranking: theta orders are returned by yield (best first) and value / convex orders by ``|edge|``, so when
+  cash (``risk.apply``) or writes (the OMS keeps the order within a priority) bind, the best opportunity is
+  served first, not the alphabetically first race. Priority groups stay intact.
 * Value: inside ``value.band`` when ``|fair - mid| > max(value.min_edge, VALUE_SD_Z * sd)`` -> resting
   order at ``fair -/+ quote_offset`` (buy YES if fair > mid else sell YES), capped at the touch so it never
   goes *through* the spread. An edge inside the fair value's own uncertainty is not an edge.
@@ -42,12 +53,19 @@ Rules
   (a side that would quote through our own fair value is dropped), size ``mm.size``.
 * Fade / follow: only when ``sentiment.enable_fade_follow`` and an ActiveEvent exists for the race.
   Soft -> fade with a resting order ``FADE_OFFSET`` (4.5c, the middle of the 3-6c range) from the
-  pre-event price on the far side of the move; hard -> shift the pre-event price by the move divided by
-  the ~0.64 contemporaneous pass-through and quote toward it (follow). The pre-event price is the
-  latest Quote before the event, else the (stale) fair value.
-* Default quantities before risk scaling: theta 500, value 200, convex from the sleeve (``CONVEX_QTY``
-  only names the old placeholder), mm ``mm.size``, fade / follow 100. Every price passes through
-  ``round_tick``; nothing crosses the spread unless ``take``.
+  pre-event price on the far side of the move, but only when the move is an over-reaction: the margin
+  shift it implies through the T-distribution map (``probmath.implied_margin_shift``, chamber sigma)
+  exceeds what the event class plausibly justifies, ``SOFT_EVENT_MAX_SHIFT_PTS`` (1.5) for a soft event
+  and ``POLL_EVENT_MAX_SHIFT_PTS`` (2.0) for kind ``poll`` (a single poll; feeds/events.py labels polls
+  ``soft`` today, so they get the stricter 1.5). On a 50/50 Senate race (sigma 7, t5) 1.5 pts is ~8c and
+  2.0 pts ~10.7c. Hard -> shift the pre-event price by the move divided by the ~0.64 contemporaneous
+  pass-through and quote toward it (follow). The pre-event price is the latest Quote before the event,
+  else the (stale) fair value.
+* Quantities: ``risk.apply`` re-sizes theta / value / convex / fade / follow from fractional Kelly on the
+  order's ``fair``, so the fixed quantities here (theta 500, value 200, fade / follow 100) are
+  placeholders; convex is sized from the sleeve here (``CONVEX_QTY`` only names the old placeholder) and
+  that quantity is risk's ceiling; mm ``mm.size``. Every price passes through ``round_tick``; nothing
+  crosses the spread unless ``take``.
 """
 
 from __future__ import annotations
@@ -59,10 +77,11 @@ from sqlalchemy import select
 from sigcup.common.log import get_logger
 from sigcup.common.time import ensure_utc
 from sigcup.db import engine as dbengine
-from sigcup.db.models import Fill, Quote, Strategy
+from sigcup.db.models import Fill, Quote, Rating, Strategy
 from sigcup.settings import StrategyConfig
 from sigcup.sig.schemas import PRICE_MAX, PRICE_MIN, TICK, round_tick
 from sigcup.trader.consistency import outside_view
+from sigcup.trader.probmath import implied_margin_shift
 from sigcup.trader.types import (
     PRIORITY_MM,
     PRIORITY_THETA,
@@ -78,11 +97,15 @@ from sigcup.trader.types import (
 __all__ = [
     "CONVEX_QTY",
     "EVENT_QTY",
+    "POLL_EVENT_MAX_SHIFT_PTS",
+    "SEED_RATING_SOURCES",
+    "SOFT_EVENT_MAX_SHIFT_PTS",
     "THETA_QTY",
     "THETA_SWITCH_MARGIN",
     "VALUE_QTY",
     "VALUE_SD_Z",
     "generate",
+    "grounded",
     "theta_candidates",
     "theta_price",
     "theta_yield",
@@ -103,6 +126,16 @@ FADE_MIN_MOVE = 0.03  # ignore smaller moves: indistinguishable from noise / the
 HARD_PASS_THROUGH = 0.64  # Angelini & De Angelis (2026): contemporaneous pass-through on Kalshi
 EVENT_MIN_CONFIDENCE = 0.5
 TOSSUP_BAND = (0.30, 0.70)
+# Largest margin shift (points, through probmath's T-distribution map) an event class plausibly justifies; a
+# soft-event move implying more is an over-reaction and is faded. A 1-pt poll surprise is worth ~5.4c on a
+# 50/50 Senate race (sigma 7, t5): one poll can justify ~2 pts, a debate / ad / gaffe less.
+SOFT_EVENT_MAX_SHIFT_PTS = 1.5
+POLL_EVENT_MAX_SHIFT_PTS = 2.0
+FADE_MAX_SHIFT_PTS = {"soft": SOFT_EVENT_MAX_SHIFT_PTS, "poll": POLL_EVENT_MAX_SHIFT_PTS}
+# Rating sources that are not published ratings: config/ratings_manual.yaml stores its "seed guess"
+# incumbency / PVI placeholders under its default source ``manual``.
+SEED_RATING_SOURCES = frozenset({"manual"})
+RATING_MAX_AGE = timedelta(days=60)  # = fairvalue.RATING_MAX_AGE: older ratings never reach the fair value
 _EPS = 1e-9
 _OPEN_STATUSES = {"open", "active", "trading", ""}
 
@@ -123,6 +156,47 @@ def _cap_sell(price: float, bid: float | None) -> float:
     if bid is not None and price < bid:
         price = bid
     return round_tick(price)
+
+
+def _published_rating_races(now: datetime) -> set[str]:
+    """Races with a rating from a published source (not ``SEED_RATING_SOURCES``) young enough for fairvalue to
+    use. Empty when the Rating table cannot be read (callers then trust only reference-backed fair values)."""
+    try:
+        with dbengine.session() as s:
+            rows = s.execute(select(Rating.race_id, Rating.source, Rating.ts)).all()
+    except Exception as e:  # noqa: BLE001 - fail closed: no rating counts as published
+        log.warning("grounding: ratings unavailable (%s); trading reference-backed fair values only", e)
+        return set()
+    out: set[str] = set()
+    for race_id, source, ts in rows:
+        if str(source or "").strip().lower() in SEED_RATING_SOURCES:
+            continue
+        if ts is not None and now - ensure_utc(ts) > RATING_MAX_AGE:
+            continue
+        out.add(str(race_id))
+    return out
+
+
+class _PublishedRatings:
+    """Lazily loaded set of races with a published rating (one DB read per ``generate``, only if needed)."""
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+        self._races: set[str] | None = None
+
+    def __contains__(self, race_id: object) -> bool:
+        if self._races is None:
+            self._races = _published_rating_races(self.now)
+        return race_id in self._races
+
+
+def grounded(fv: FairValue, race_id: str, published: _PublishedRatings | set[str]) -> bool:
+    """True when ``fv`` rests on a real-money reference or on a published rating (see the module docstring);
+    a fair value built only from seed-guess ratings and the fundamentals prior is a guess and is not traded."""
+    comps = fv.components or {}
+    if "ref" in comps:
+        return True
+    return "ratings" in comps and race_id in published
 
 
 def theta_price(fair: float | None, ask: float | None, cfg: StrategyConfig) -> float | None:
@@ -152,13 +226,21 @@ def theta_yield(fair: float, price: float, cfg: StrategyConfig) -> float:
     return min(float(fair), float(cfg.theta.fair_cap)) / float(price) - 1.0
 
 
-def theta_candidates(ctx: TraderContext, race_views: list[MarketView]) -> list[tuple[float, DesiredOrder]]:
-    """(yield, order) for every theta candidate on a race: buy YES on favourites, buy NO on longshots."""
+def theta_candidates(
+    ctx: TraderContext, race_views: list[MarketView], published: _PublishedRatings | set[str] | None = None
+) -> list[tuple[float, DesiredOrder]]:
+    """(yield, order) for every theta candidate on a race: buy YES on favourites, buy NO on longshots.
+    Markets whose fair value is not ``grounded`` are skipped."""
     cfg = ctx.cfg
+    if published is None:
+        published = _PublishedRatings(ctx.now)
     out: list[tuple[float, DesiredOrder]] = []
     for v in race_views:
         fv = ctx.fair.get(v.exchange_id)
         if fv is None or not _is_open(v):
+            continue
+        if not grounded(fv, v.race_id, published):
+            log.debug("%s: fair value has no reference or published rating; no theta", v.exchange_id)
             continue
         tf = trade_fair(ctx, v.race_id, fv)
         if tf is None:
@@ -334,19 +416,29 @@ def _pick_theta(cands: list[tuple[float, DesiredOrder]], held: set[tuple[str, st
     return (near_yes or cands)[0][1]
 
 
-def _theta(ctx: TraderContext, by_race: dict[str, list[MarketView]]) -> list[DesiredOrder]:
-    out: list[DesiredOrder] = []
+def _theta(
+    ctx: TraderContext, by_race: dict[str, list[MarketView]], published: _PublishedRatings | set[str]
+) -> list[DesiredOrder]:
+    """One theta order per race, best yield first (ties by market id)."""
+    picks: list[tuple[float, DesiredOrder]] = []
     for race_id in sorted(by_race):
-        cands = theta_candidates(ctx, by_race[race_id])
+        cands = theta_candidates(ctx, by_race[race_id], published)
         if not cands:
             continue
-        out.append(_pick_theta(cands, _theta_held(by_race[race_id])))
-    return out
+        pick = _pick_theta(cands, _theta_held(by_race[race_id]))
+        picks.append((next(y for y, d in cands if d is pick), pick))
+    picks.sort(key=lambda t: (-t[0], t[1].exchange_id, t[1].side))
+    return [d for _, d in picks]
 
 
-def _value_and_convex(ctx: TraderContext, outside: dict[str, MarketView]) -> list[DesiredOrder]:
+def _value_and_convex(
+    ctx: TraderContext, outside: dict[str, MarketView], published: _PublishedRatings | set[str] | None = None
+) -> list[DesiredOrder]:
+    """Value and convex orders, largest ``|edge|`` first (ties in market-id order, value before convex)."""
     cfg = ctx.cfg
     lo, hi = cfg.value.band
+    if published is None:
+        published = _PublishedRatings(ctx.now)
     out: list[DesiredOrder] = []
     convex: list[DesiredOrder] = []
     for eid in sorted(ctx.markets):
@@ -354,6 +446,9 @@ def _value_and_convex(ctx: TraderContext, outside: dict[str, MarketView]) -> lis
         ov = outside.get(eid, v)
         fv = ctx.fair.get(eid)
         if fv is None or not _is_open(v) or ov.mid is None:
+            continue
+        if not grounded(fv, v.race_id, published):
+            log.debug("%s: fair value has no reference or published rating; no value / convex", eid)
             continue
         tf = trade_fair(ctx, v.race_id, fv)
         if tf is None:
@@ -405,6 +500,7 @@ def _value_and_convex(ctx: TraderContext, outside: dict[str, MarketView]) -> lis
                     )
                 )
     out.extend(_size_convex(ctx, convex))
+    out.sort(key=lambda d: -abs(d.edge or 0.0))  # stable: ties keep market-id order, value before convex
     return out
 
 
@@ -578,7 +674,7 @@ def _event_orders(ctx: TraderContext, by_race: dict[str, list[MarketView]], outs
     seen: set[str] = set()
     for e in sorted(ctx.events, key=lambda x: ensure_utc(x.ts), reverse=True):
         kind = (e.kind or "").lower()
-        if kind not in ("soft", "hard") or e.race_id in seen:
+        if (kind not in FADE_MAX_SHIFT_PTS and kind != "hard") or e.race_id in seen:
             continue
         if float(e.confidence or 0.0) < EVENT_MIN_CONFIDENCE:
             continue
@@ -604,7 +700,14 @@ def _event_orders(ctx: TraderContext, by_race: dict[str, list[MarketView]], outs
             continue
         move, v, pre = best
         mid = float(outside.get(v.exchange_id, v).mid)  # type: ignore[arg-type]
-        if kind == "soft":
+        if kind in FADE_MAX_SHIFT_PTS:
+            shift = implied_margin_shift(pre, mid, v.chamber, cfg)
+            if abs(shift) <= FADE_MAX_SHIFT_PTS[kind] + _EPS:
+                log.debug(
+                    "%s: %s-event move %.3f -> %.3f implies %.2f pts <= %.1f: justified, no fade",
+                    v.exchange_id, kind, pre, mid, shift, FADE_MAX_SHIFT_PTS[kind],
+                )
+                continue
             if move > 0:
                 px = _cap_sell(pre + FADE_OFFSET, v.bid)
                 action = "sell"
@@ -622,7 +725,7 @@ def _event_orders(ctx: TraderContext, by_race: dict[str, list[MarketView]], outs
                     priority=PRIORITY_VALUE,
                     fair=pre,
                     edge=abs(px - pre),
-                    reason=f"fade soft event: pre={pre:.3f} mid={mid:.3f} ({e.description[:60]})",
+                    reason=f"fade {kind} event: pre={pre:.3f} mid={mid:.3f} shift={shift:+.2f}pts ({e.description[:60]})",
                 )
             )
         else:
@@ -652,7 +755,8 @@ def _event_orders(ctx: TraderContext, by_race: dict[str, list[MarketView]], outs
 
 # -- entry point ----------------------------------------------------------------------------------
 def generate(ctx: TraderContext, arbs: list[ArbOpportunity]) -> list[DesiredOrder]:
-    """The pre-risk desired order set, arb legs first, then by priority (stable)."""
+    """The pre-risk desired order set, arb legs first, then by priority (stable: theta best yield first,
+    value / convex largest ``|edge|`` first)."""
     if ctx.hours_to_deadline <= 0:
         return []
     out: list[DesiredOrder] = []
@@ -660,8 +764,9 @@ def generate(ctx: TraderContext, arbs: list[ArbOpportunity]) -> list[DesiredOrde
     if not ctx.election_night:
         by_race = _by_race(ctx)
         outside = {eid: outside_view(v) for eid, v in ctx.markets.items()}
-        out.extend(_theta(ctx, by_race))
-        out.extend(_value_and_convex(ctx, outside))
+        published = _PublishedRatings(ctx.now)  # read at most once per cycle, only if a fair lacks a reference
+        out.extend(_theta(ctx, by_race, published))
+        out.extend(_value_and_convex(ctx, outside, published))
         out.extend(_mm(ctx, outside))
         out.extend(_event_orders(ctx, by_race, outside))
     for d in out:
