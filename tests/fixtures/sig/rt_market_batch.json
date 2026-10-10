@@ -1,0 +1,32 @@
+{
+  "topic": "realtime:tournament:tour-2026-midterms:market:387",
+  "event": "broadcast",
+  "ref": null,
+  "payload": {
+    "type": "broadcast",
+    "event": "market_batch",
+    "payload": {
+      "delivery": {"revision": 12, "previousRevision": 11},
+      "books": [
+        {
+          "exchangeId": "1076",
+          "bids": [{"price": 0.84, "quantity": 100}, {"price": 0.845, "quantity": 20}],
+          "asks": [{"price": 0.9, "quantity": 50}, {"price": 0.88, "quantity": 20}],
+          "asOf": {"sequence": 993, "at": "2026-10-10T12:00:02.0000000Z"},
+          "nextExpiryAt": "2026-10-10T12:10:00Z"
+        },
+        {
+          "exchangeId": "1077",
+          "bids": [[0.1, 20]],
+          "asks": [[0.155, 35]],
+          "asOf": {"sequence": 410, "at": "2026-10-10T12:00:02.1Z"}
+        }
+      ],
+      "trades": [
+        {"exchangeId": "1076", "price": 0.88, "quantity": 5, "sequence": 992, "at": "2026-10-10T12:00:01.9Z"}
+      ],
+      "marketSettled": false,
+      "resyncRequired": false
+    }
+  }
+}

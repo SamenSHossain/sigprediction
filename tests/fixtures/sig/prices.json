@@ -1,0 +1,8 @@
+{
+  "data": [
+    {"exchangeId": "1076", "bestBid": 0.845, "bestAsk": 0.88, "latestPrice": 0.85, "spread": 0.035, "asOf": {"at": "2026-10-10T12:00:00.1234567Z", "sequence": 991}},
+    {"exchange_id": "1077", "best_bid": 0.10, "best_ask": 0.155, "last": 0.12, "bid_size": 20, "ask_size": 35},
+    {"id": "1078", "bid": 0.5, "ask": 0.52, "lastTradePrice": 0.51, "bestBidSize": 100, "bestAskSize": 4000},
+    {"exchangeId": "1079", "bestBid": null, "bestAsk": 0.995, "latestPrice": null}
+  ]
+}

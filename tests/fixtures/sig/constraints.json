@@ -1,0 +1,17 @@
+{
+  "violationsCount": 1,
+  "computedAt": "2026-10-10T12:00:00Z",
+  "data": [
+    {
+      "relationshipId": "rel-1",
+      "type": "sum_of_yes_bids_gt_1",
+      "violationAmount": 0.03,
+      "reason": "YES bids sum to 1.03",
+      "observedPrices": [{"exchangeId": "1076", "bestBid": 0.95}, {"exchangeId": "1077", "bestBid": 0.08}],
+      "suggestedCorrectiveTrades": [
+        {"action": "sell", "outcomeSide": "yes", "exchangeId": "1076", "currentPrice": 0.95, "rationale": "sell rich leg"},
+        {"action": "sell", "outcomeSide": "yes", "exchangeId": "1077", "currentPrice": 0.08, "rationale": "sell rich leg"}
+      ]
+    }
+  ]
+}

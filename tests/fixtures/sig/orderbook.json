@@ -1,0 +1,9 @@
+{
+  "data": {
+    "exchangeId": "1076",
+    "bids": [{"price": 0.82, "quantity": 5}, {"price": 0.845, "quantity": 20}, {"price": 0.84, "quantity": 100}],
+    "asks": [{"price": 0.9, "quantity": 50}, {"price": 0.88, "quantity": 20}],
+    "asOf": {"at": "2026-10-10T12:00:01.5Z", "sequence": 992},
+    "nextExpiryAt": "2026-10-10T12:10:00Z"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"exchangeId": "1076", "quantity": 300, "avgCost": 0.84, "currentPrice": 0.86, "marketTitle": "Will the Democratic Party win the RI Senate race?", "option": "YES"},
+    {"exchangeId": "1077", "quantity": 150, "avgCost": 0.11, "currentPrice": 0.12, "option": "NO"}
+  ],
+  "pagination": {"nextCursor": "c2", "hasMore": true}
+}

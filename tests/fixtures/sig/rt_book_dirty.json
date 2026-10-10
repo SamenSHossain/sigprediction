@@ -1,0 +1,1 @@
+{"topic": "realtime:tournament:tour-2026-midterms:market:387", "event": "broadcast", "ref": null, "payload": {"type": "broadcast", "event": "book_dirty", "payload": {"reason": "admin"}}}

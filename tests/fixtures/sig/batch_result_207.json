@@ -1,0 +1,6 @@
+{
+  "data": [
+    {"index": 0, "data": {"orderId": "o-301", "status": "open", "quantityTraded": 0}},
+    {"index": 1, "error": {"code": "VALIDATION_ERROR", "message": "insufficient funds"}}
+  ]
+}

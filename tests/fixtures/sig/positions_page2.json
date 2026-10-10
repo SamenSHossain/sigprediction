@@ -1,0 +1,6 @@
+{
+  "positions": [
+    {"exchange_id": "1078", "quantity": -40, "averagePricePaid": 0.48, "mark": 0.5}
+  ],
+  "pagination": {"nextCursor": null, "hasMore": false}
+}

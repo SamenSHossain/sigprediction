@@ -1,0 +1,17 @@
+{
+  "topic": "realtime:user:prof-42",
+  "event": "broadcast",
+  "ref": null,
+  "payload": {
+    "type": "broadcast",
+    "event": "account_batch",
+    "payload": {
+      "delivery": {"revision": 3, "previousRevision": 2},
+      "fills": [
+        {"orderId": "o-1", "exchangeId": "1076", "side": "yes", "action": "buy", "price": 0.845, "quantity": 20, "executedAt": "2026-10-10T12:00:05Z"},
+        {"orderId": "o-2", "exchangeId": "1077", "price": 0.155, "quantity": -50, "at": "2026-10-10T12:00:06Z"}
+      ],
+      "resyncRequired": true
+    }
+  }
+}

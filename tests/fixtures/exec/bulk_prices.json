@@ -1,0 +1,10 @@
+{
+  "_comment": "Shape of GET /exchanges/prices?ids=... reconstructed from docs/research/platform.md (bestBid, bestAsk, latestPrice, spread). Values are illustrative, not recorded from the live exchange.",
+  "data": [
+    {"exchangeId": "ex-sen-tx-d", "bestBid": 0.615, "bestAsk": 0.635, "latestPrice": 0.62, "spread": 0.02, "bestBidSize": 20, "bestAskSize": 20, "updatedAt": "2026-10-10T11:59:30Z"},
+    {"exchangeId": "ex-sen-tx-r", "bestBid": 0.355, "bestAsk": 0.385, "latestPrice": 0.37, "spread": 0.03},
+    {"exchangeId": "ex-gov-ri-d", "bestBid": null, "bestAsk": 0.995, "latestPrice": 0.93},
+    {"exchangeId": "ex-house-pa-08-d", "bestBid": "0.485", "bestAsk": "0.515", "latestPrice": null, "bestBidSize": "4500", "bestAskSize": "4200"}
+  ],
+  "pagination": {"hasMore": false, "nextCursor": null}
+}

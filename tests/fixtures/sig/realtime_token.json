@@ -1,0 +1,9 @@
+{
+  "data": {
+    "supabaseUrl": "https://abcdefgh.supabase.co",
+    "anonKey": "anon-public-key",
+    "token": "eyJ.realtime.jwt",
+    "expiresAt": "2026-10-10T15:00:00Z",
+    "channels": {"user": "user:prof-42"}
+  }
+}

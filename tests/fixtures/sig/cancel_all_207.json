@@ -1,0 +1,1 @@
+{"results": [{"orderId": "o-1", "status": "cancelled"}, {"orderId": "o-2", "status": "cancelled"}, {"orderId": "o-3", "status": "error", "error": {"code": "NOT_FOUND"}}]}

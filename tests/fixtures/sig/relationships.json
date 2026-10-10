@@ -1,0 +1,6 @@
+{
+  "data": [
+    {"id": "rel-1", "type": "mutually_exclusive", "isExhaustive": true, "active": true, "exchanges": [{"id": "1076", "marketId": "387"}, {"id": "1077", "marketId": "388"}]},
+    {"relationshipId": "rel-2", "kind": "MUTUALLY_EXCLUSIVE", "is_exhaustive": false, "exchangeIds": ["2001", "2002", "2003"]}
+  ]
+}

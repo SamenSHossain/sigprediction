@@ -1,0 +1,1 @@
+["7", null, "realtime:tournament:tour-2026-midterms:market:387", "broadcast", {"type": "broadcast", "event": "market_batch", "payload": {"delivery": {"revision": 13, "previousRevision": 12}, "books": [{"exchangeId": "1076", "bids": [{"price": 0.85, "quantity": 10}], "asks": [], "asOf": {"sequence": 994, "at": "2026-10-10T12:00:03Z"}}], "trades": []}}]

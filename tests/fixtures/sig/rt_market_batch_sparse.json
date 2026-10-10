@@ -1,0 +1,1 @@
+{"topic": "realtime:tournament:tour-2026-midterms:market:999", "event": "broadcast", "payload": {"type": "broadcast", "event": "market_batch", "payload": {"books": [{"bids": [{"price": 0.3, "size": 7}], "asks": [{"p": 0.35, "qty": 9}]}]}}}

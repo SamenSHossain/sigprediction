@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"fillId": "f-1", "orderId": "o-8", "exchangeId": "1078", "executedAt": "2026-10-09T10:00:00Z", "side": "yes", "action": "sell", "price": 0.5, "quantity": 40},
+    {"fillId": "f-0", "orderId": "o-7", "exchangeId": "1078", "executedAt": "2026-10-08T10:00:00Z", "side": "yes", "action": "buy", "price": 0.49, "quantity": 40}
+  ],
+  "pagination": {"nextCursor": "older2", "hasMore": true}
+}

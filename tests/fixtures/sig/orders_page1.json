@@ -1,0 +1,7 @@
+{
+  "data": [
+    {"orderId": "o-1", "exchangeId": "1076", "side": "yes", "action": "buy", "price": 0.845, "quantity": 100, "filledQuantity": 20, "status": "open", "idempotencyKey": "k-1", "createdAt": "2026-10-10T11:59:00Z", "expirationDate": "2026-10-10T12:14:00Z"},
+    {"id": "o-2", "exchangeId": "1077", "side": "NO", "orderType": "SELL", "priceLimit": 0.155, "quantity": 50, "remainingQuantity": 50, "state": "open"}
+  ],
+  "pagination": {"nextCursor": "abc", "hasMore": true}
+}

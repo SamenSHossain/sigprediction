@@ -1,0 +1,11 @@
+{
+  "myRank": 17,
+  "total": 1234,
+  "memberCount": 1234,
+  "leaderboard": [
+    {"rank": 1, "username": "alpha", "finalTotalValue": 160000.0, "tradesCount": 900},
+    {"rank": 2, "username": "beta", "finalTotalValue": 150000.0, "tradesCount": 120},
+    {"rank": 3, "username": "gamma", "finalTotalValue": 140000.0, "tradesCount": 12},
+    {"rank": 17, "username": "samen", "finalTotalValue": 104000.0, "tradesCount": 40, "isMe": true}
+  ]
+}
