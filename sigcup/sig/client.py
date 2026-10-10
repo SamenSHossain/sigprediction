@@ -38,7 +38,7 @@ import httpx
 from dateutil import parser as dateparser
 from pydantic import Field
 
-from sigcup.common.time import before_deadline, set_server_offset_from_date_header, utc_now
+from sigcup.common.time import before_deadline, server_offset, set_server_offset_from_date_header, utc_now
 from sigcup.settings import Limits, StrategyConfig, config, secrets
 from sigcup.sig.errors import (
     AuthError,
@@ -78,6 +78,58 @@ MULTI_LEG_MAX = 10
 BATCH_MAX = 50
 MAX_PAGES = 50
 DEFAULT_RETRY_AFTER = 60.0
+
+# Limiter priorities (lower numbers are served first). The strategy tiers mirror sigcup.trader.types.PRIORITY_*
+# (not imported: the exchange layer does not depend on the trader).
+PRIORITY_ARB, PRIORITY_THETA, PRIORITY_VALUE, PRIORITY_MM, PRIORITY_HOUSEKEEPING = 0, 1, 2, 3, 4
+PRIORITY_CANCEL = 1  # pulling a resting quote reduces risk: ahead of value / mm placements
+PRIORITY_RECONCILE = 1  # account, positions, open orders, fills: they resolve uncertain orders
+PRIORITY_MARKET_DATA = 3  # bulk price and depth polling
+_STRATEGY_PRIORITY = {
+    "arb": PRIORITY_ARB,
+    "election": PRIORITY_ARB,
+    "theta": PRIORITY_THETA,
+    "value": PRIORITY_VALUE,
+    "convex": PRIORITY_VALUE,
+    "fade": PRIORITY_VALUE,
+    "follow": PRIORITY_VALUE,
+    "mm": PRIORITY_MM,
+}
+
+# Server clock sampling: the HTTP Date header has 1 s resolution, so only a fresh (uncached, quick) response
+# is sampled, a sample may always tighten the estimate upwards (each one is a lower bound on the true offset),
+# and the estimate only moves down on a change bigger than the truncation + latency noise.
+CLOCK_SAMPLE_MAX_RTT_S = 2.0
+CLOCK_DECREASE_S = 3.0
+
+
+def strategy_priority(strategy: Any) -> int:
+    """Default write priority for an OrderRequest.strategy tag (manual / unknown -> housekeeping)."""
+    s = str(getattr(strategy, "value", strategy) or "").lower()
+    return _STRATEGY_PRIORITY.get(s, PRIORITY_HOUSEKEEPING)
+
+
+class CancelAllIncomplete(SigError):
+    """cancel-all did not confirm every cancel: `failed` lists the order ids that may still be live (empty when
+    the exchange answered a partial result we could not read). Verify with get_open_orders()."""
+
+    def __init__(self, message: str, status: int | None = None, *, cancelled: int = 0, failed: Sequence[str] = ()):
+        super().__init__(message, status, "CANCEL_ALL_INCOMPLETE")
+        self.cancelled = cancelled
+        self.failed = list(failed)
+
+
+_SHAPES_LOGGED: set[tuple[str, frozenset[str]]] = set()
+
+
+def _warn_shape(kind: str, raw: Mapping[str, Any], message: str) -> None:
+    """Log an unrecognised payload once per (kind, key set), with a raw sample, at WARNING."""
+    key = (kind, frozenset(str(k) for k in raw.keys()))
+    if key in _SHAPES_LOGGED:
+        return
+    _SHAPES_LOGGED.add(key)
+    sample = str(dict(raw))
+    log.warning("%s: keys=%s sample=%s", message, sorted(key[1]), sample[:400])
 
 _PAGE_KEYS: tuple[str, ...] = (
     "data",
@@ -300,7 +352,18 @@ def parse_fill(raw: Mapping[str, Any]) -> FillInfo | None:
     if exchange_id is None or price is None or qty is None:
         return None
     side = norm_side(pick(raw, "side", "option", "outcome", "outcomeSide"))
+    if side not in ("yes", "no"):
+        is_yes = to_bool(pick(raw, "isYes", "is_yes"))
+        if is_yes is not None:
+            side = "yes" if is_yes else "no"
     action = norm_action(pick(raw, "action", "orderType", "type", "direction"))
+    if action not in ("buy", "sell"):
+        is_buy = to_bool(pick(raw, "isBuy", "is_buy", "buy"))
+        if is_buy is None:
+            is_sell = to_bool(pick(raw, "isSell", "is_sell"))
+            is_buy = None if is_sell is None else not is_sell
+        if is_buy is not None:
+            action = "buy" if is_buy else "sell"
     if qty < 0:  # signed quantity convention (+YES/-NO)
         qty = abs(qty)
         side = side or "no"
@@ -312,6 +375,7 @@ def parse_fill(raw: Mapping[str, Any]) -> FillInfo | None:
     }
     if side is None or action is None:
         extra["side_or_action_missing"] = True
+        _warn_shape("fill", raw, "fill without a recognisable side/action (defaulting to yes/buy)")
     return FillInfo(
         fill_id=str(fill_id) if fill_id is not None else synth_fill_id(raw, order_id, exchange_id),
         order_id=str(order_id) if order_id is not None else None,
@@ -336,30 +400,44 @@ def unwrap(payload: Any, *keys: str) -> Any:
 
 
 def page_items(payload: Any, keys: Sequence[str] = _PAGE_KEYS) -> tuple[list[Any], str | None, bool]:
-    """Split a list response into (items, next_cursor, has_more); tolerates bare lists and several wrappers."""
+    """Split a list response into (items, next_cursor, has_more); tolerates bare lists and several wrappers,
+    including a nested wrapper that carries its own pagination (`{"data": {"orders": [...], "pagination": ...}}`)."""
     if payload is None:
         return [], None, False
+    items, cursor, has_more, _found = _page_split(payload, keys)
+    if has_more is None:
+        has_more = cursor is not None
+    return items, cursor, bool(has_more)
+
+
+def _page_split(payload: Any, keys: Sequence[str]) -> tuple[list[Any], str | None, bool | None, bool]:
+    """(items, cursor, has_more or None when unstated, whether a list was found). Outer pagination wins over
+    the pagination of the nested wrapper the items came from."""
     if isinstance(payload, list):
-        return list(payload), None, False
+        return list(payload), None, None, True
     if not isinstance(payload, Mapping):
-        return [], None, False
+        return [], None, None, False
     items: list[Any] = []
+    found = False
+    inner_cursor: str | None = None
+    inner_more: bool | None = None
     for k in keys:
         v = payload.get(k)
         if isinstance(v, list):
-            items = v
+            items, found = v, True
             break
         if isinstance(v, Mapping):
-            inner_items, _, _ = page_items(v, keys)
-            if inner_items:
-                items = inner_items
+            sub_items, sub_cursor, sub_more, sub_found = _page_split(v, keys)
+            if sub_found:
+                items, found, inner_cursor, inner_more = sub_items, True, sub_cursor, sub_more
                 break
     pag = payload.get("pagination") if isinstance(payload.get("pagination"), Mapping) else payload
     cursor = pick(pag, "nextCursor", "next_cursor", "cursor", "next")
     has_more = to_bool(pick(pag, "hasMore", "has_more", "more"))
+    cursor_s = str(cursor) if cursor is not None else inner_cursor
     if has_more is None:
-        has_more = cursor is not None
-    return items, (str(cursor) if cursor is not None else None), bool(has_more)
+        has_more = inner_more
+    return items, cursor_s, has_more, found
 
 
 def _error_info(resp: httpx.Response) -> tuple[str | None, str]:
@@ -455,6 +533,8 @@ class SigClient:
         self._tournament: TournamentInfo | None = None
         self._fills_path: str | None = None
         self._positions_path: str | None = None
+        self._clock_synced = False
+        self._truncation_warned: set[str] = set()
         self._owns_http = http is None
         self._http = http or httpx.AsyncClient(
             base_url=self.base_url,
@@ -484,8 +564,12 @@ class SigClient:
         write: bool = False,
         priority: int = 2,
         extra_ok: Iterable[int] = (),
+        deadline: bool = False,
+        with_status: bool = False,
     ) -> Any:
-        """One rate-limited HTTP call. Returns the parsed JSON body (None when empty).
+        """One rate-limited HTTP call. Returns the parsed JSON body (None when empty), or (status, body) when
+        `with_status`. `deadline=True` (order-creating writes) re-checks the competition deadline after the
+        limiter wait, which can outlast a 429 freeze, so nothing is POSTed past the cutoff.
 
         Raises RateLimited (429, after freezing both budgets), RequestInFlight (409), AuthError (401/403),
         ValidationError (other 4xx), TransientError (503, or any 5xx/timeout on a read) and OrderStatusUnknown
@@ -493,6 +577,8 @@ class SigClient:
         """
         limiter = self.budget.writes if write else self.budget.reads
         await limiter.wait(priority)
+        if deadline:
+            self._check_deadline()
         timeout = self.limits.write_timeout_s if write else self.limits.read_timeout_s
         params = {k: v for k, v in (params or {}).items() if v is not None}
         t0 = time.monotonic()
@@ -508,9 +594,28 @@ class SigClient:
             if write:
                 raise OrderStatusUnknown(f"transport error on {method} {path}", None, "TRANSPORT") from e
             raise TransientError(f"transport error on {method} {path}", None, "TRANSPORT") from e
-        set_server_offset_from_date_header(resp.headers.get("Date"))
-        log.debug("%s %s -> %s in %.0f ms", method, path, resp.status_code, (time.monotonic() - t0) * 1000)
-        return self._classify(resp, method, path, write, set(extra_ok))
+        rtt = time.monotonic() - t0
+        self._sample_server_clock(resp, rtt)
+        log.debug("%s %s -> %s in %.0f ms", method, path, resp.status_code, rtt * 1000)
+        body = self._classify(resp, method, path, write, set(extra_ok))
+        return (resp.status_code, body) if with_status else body
+
+    def _sample_server_clock(self, resp: httpx.Response, rtt: float) -> None:
+        """Update the server clock offset from a fresh response's Date header without 1-s truncation jitter."""
+        date = resp.headers.get("Date")
+        if not date or "Age" in resp.headers or rtt > CLOCK_SAMPLE_MAX_RTT_S:
+            return  # absent, served from a cache (an old Date), or too slow to bound the offset tightly
+        try:
+            server = parsedate_to_datetime(date)
+        except (TypeError, ValueError):
+            return
+        if server.tzinfo is None:
+            server = server.replace(tzinfo=UTC)
+        sample = (server - datetime.now(UTC)).total_seconds()
+        current = server_offset().total_seconds()
+        if not self._clock_synced or sample > current or sample < current - CLOCK_DECREASE_S:
+            set_server_offset_from_date_header(date)
+            self._clock_synced = True
 
     def _classify(self, resp: httpx.Response, method: str, path: str, write: bool, extra_ok: set[int]) -> Any:
         status = resp.status_code
@@ -560,6 +665,15 @@ class SigClient:
             if stop_when is not None and stop_when(items):
                 break
             if not has_more or not cursor or cursor in seen:
+                limit = to_int(p.get("limit"))
+                if limit and len(items) >= limit and not cursor and path not in self._truncation_warned:
+                    self._truncation_warned.add(path)
+                    log.warning(
+                        "%s returned a full page (%d items) with no cursor: the list may be truncated (%s)",
+                        path,
+                        len(items),
+                        str(payload)[:300],
+                    )
                 break
             seen.add(cursor)
         return out
@@ -630,7 +744,9 @@ class SigClient:
             raise
         return _parse_market(raw) if isinstance(raw, Mapping) else None
 
-    async def get_prices(self, exchange_ids: list[str], *, priority: int = 2) -> dict[str, PriceSnapshot]:
+    async def get_prices(
+        self, exchange_ids: list[str], *, priority: int = PRIORITY_MARKET_DATA
+    ) -> dict[str, PriceSnapshot]:
         """GET /exchanges/prices?ids=... in chunks of 100 ids (one read per chunk)."""
         ids = [str(x) for x in dict.fromkeys(exchange_ids)]
         if not ids:
@@ -653,7 +769,9 @@ class SigClient:
             return None
         return _parse_price_row(payload, default_id=str(exchange_id))
 
-    async def get_orderbook(self, exchange_id: str, depth: int = 20, *, priority: int = 2) -> OrderBook:
+    async def get_orderbook(
+        self, exchange_id: str, depth: int = 20, *, priority: int = PRIORITY_MARKET_DATA
+    ) -> OrderBook:
         """GET /exchanges/{id}/orderbook?depth=N (depth <= 200). Bids descending, asks ascending."""
         depth = max(1, min(200, int(depth)))
         tid = await self.ensure_tournament_id()
@@ -669,9 +787,9 @@ class SigClient:
         return book
 
     # -- account -----------------------------------------------------------------------------
-    async def get_account(self) -> AccountInfo:
+    async def get_account(self, *, priority: int = PRIORITY_RECONCILE) -> AccountInfo:
         """GET /account; if it carries no balance, the tournament's `myBalance` is used (one extra read)."""
-        raw = unwrap(await self._get("/account"), "data", "account")
+        raw = unwrap(await self._get("/account", priority=priority), "data", "account")
         raw = raw if isinstance(raw, Mapping) else {}
         pid = pick(raw, "profileId", "profile_id", "id", "userId", "user.id")
         if pid is not None:
@@ -712,9 +830,9 @@ class SigClient:
             extra.pop(k, None)
         return AccountInfo(cash=cash, positions_value=positions_value, total=total, **extra)
 
-    async def get_positions(self) -> list[PositionInfo]:
+    async def get_positions(self, *, priority: int = PRIORITY_RECONCILE) -> list[PositionInfo]:
         """GET /tournaments/{slug}/portfolio/positions (fallback /portfolio/positions?tournamentId=)."""
-        rows = await self._tournament_portfolio("positions")
+        rows = await self._tournament_portfolio("positions", priority=priority)
         out: list[PositionInfo] = []
         for raw in rows:
             p = _parse_position(raw)
@@ -722,10 +840,12 @@ class SigClient:
                 out.append(p)
         return out
 
-    async def get_open_orders(self) -> list[OrderInfo]:
+    async def get_open_orders(self, *, priority: int = PRIORITY_RECONCILE) -> list[OrderInfo]:
         """GET /orders?status=open&tournamentId=... (paginated)."""
         tid = await self.ensure_tournament_id()
-        rows = await self._paginate("/orders", {"status": "open", "tournamentId": tid, "limit": 100})
+        rows = await self._paginate(
+            "/orders", {"status": "open", "tournamentId": tid, "limit": 100}, priority=priority
+        )
         out: list[OrderInfo] = []
         for raw in rows:
             o = _parse_order(raw)
@@ -733,22 +853,24 @@ class SigClient:
                 out.append(o)
         return out
 
-    async def get_order(self, order_id: str) -> OrderInfo | None:
+    async def get_order(self, order_id: str, *, priority: int = PRIORITY_RECONCILE) -> OrderInfo | None:
         """GET /orders/{id}; None when the exchange does not know the id."""
         try:
-            raw = unwrap(await self._get(f"/orders/{order_id}"), "data", "order")
+            raw = unwrap(await self._get(f"/orders/{order_id}", priority=priority), "data", "order")
         except ValidationError as e:
             if e.status == 404:
                 return None
             raise
         return _parse_order(raw) if isinstance(raw, Mapping) else None
 
-    async def get_order_fills(self, order_id: str) -> list[FillInfo]:
+    async def get_order_fills(self, order_id: str, *, priority: int = PRIORITY_RECONCILE) -> list[FillInfo]:
         """GET /orders/{id}/fills."""
-        rows = await self._paginate(f"/orders/{order_id}/fills", {"limit": 200})
+        rows = await self._paginate(f"/orders/{order_id}/fills", {"limit": 200}, priority=priority)
         return [f for f in (parse_fill(r) for r in rows if isinstance(r, Mapping)) if f is not None]
 
-    async def get_fills(self, since: datetime | None = None) -> list[FillInfo]:
+    async def get_fills(
+        self, since: datetime | None = None, *, priority: int = PRIORITY_RECONCILE
+    ) -> list[FillInfo]:
         """GET /tournaments/{slug}/portfolio/fills (paginated, newest first); stops once a whole page predates
         `since`. Fallback: /portfolio/fills?tournamentId=."""
         since_utc = since.replace(tzinfo=UTC) if since is not None and since.tzinfo is None else since
@@ -767,13 +889,13 @@ class SigClient:
                 return False
             return all(s < since_utc for s in stamps)
 
-        rows = await self._tournament_portfolio("fills", stop_when=older_page)
+        rows = await self._tournament_portfolio("fills", stop_when=older_page, priority=priority)
         fills = [f for f in (parse_fill(r) for r in rows if isinstance(r, Mapping)) if f is not None]
         if since_utc is not None:
             fills = [f for f in fills if f.ts >= since_utc]
         return fills
 
-    async def _tournament_portfolio(self, kind: str, *, stop_when: Any = None) -> list[Any]:
+    async def _tournament_portfolio(self, kind: str, *, stop_when: Any = None, priority: int = 2) -> list[Any]:
         """Paginate a portfolio list, remembering which of the two documented paths works."""
         cache_attr = "_fills_path" if kind == "fills" else "_positions_path"
         path = getattr(self, cache_attr)
@@ -788,7 +910,7 @@ class SigClient:
             last: SigError | None = None
             for cand, p in candidates:
                 try:
-                    rows = await self._paginate(cand, p, stop_when=stop_when)
+                    rows = await self._paginate(cand, p, stop_when=stop_when, priority=priority)
                 except ValidationError as e:
                     if e.status != 404:
                         raise
@@ -799,7 +921,7 @@ class SigClient:
             raise last or ValidationError(f"no {kind} endpoint", 404, "NOT_FOUND")
         if path.startswith("/portfolio/"):
             params["tournamentId"] = await self.ensure_tournament_id()
-        return await self._paginate(path, params, stop_when=stop_when)
+        return await self._paginate(path, params, stop_when=stop_when, priority=priority)
 
     # -- orders ------------------------------------------------------------------------------
     def _order_body(self, req: OrderRequest, tid: str) -> dict[str, Any]:
@@ -824,13 +946,17 @@ class SigClient:
         if self.enforce_deadline and not before_deadline(self.cfg.deadline_utc):
             raise ValidationError("past the competition deadline: no orders may be sent", None, "DEADLINE")
 
-    async def place_order(self, req: OrderRequest, *, priority: int = 2) -> OrderResult:
-        """POST /orders. Never raises for an unknown outcome: returns OrderResult(uncertain=True) instead."""
+    async def place_order(self, req: OrderRequest, *, priority: int | None = None) -> OrderResult:
+        """POST /orders. Never raises for an unknown outcome: returns OrderResult(uncertain=True) instead.
+        The limiter priority defaults from `req.strategy` (arb 0, theta 1, value 2, mm 3, other 4)."""
         self._check_deadline()
         tid = await self.ensure_tournament_id()
         body = self._order_body(req, tid)
+        prio = priority if priority is not None else strategy_priority(req.strategy)
         try:
-            payload = await self._request("POST", "/orders", json=body, write=True, priority=priority)
+            payload = await self._request(
+                "POST", "/orders", json=body, write=True, priority=prio, deadline=True
+            )
         except OrderStatusUnknown as e:
             log.warning("order %s on %s uncertain: %s", req.idempotency_key, req.exchange_id, e)
             return OrderResult(
@@ -842,8 +968,14 @@ class SigClient:
             res.uncertain = True
         return res
 
-    async def place_multi_leg(self, legs: list[OrderRequest], *, priority: int = 0) -> MultiLegResult:
-        """POST /orders/multi-leg (<= 10 legs, atomic placement, non-atomic fills)."""
+    async def place_multi_leg(
+        self, legs: list[OrderRequest], *, priority: int | None = None
+    ) -> MultiLegResult:
+        """POST /orders/multi-leg (<= 10 legs, atomic placement, non-atomic fills).
+
+        The response is handled atomically: per-leg receipts are matched by idempotency key, then `index`, then
+        position; a group-level error rejects every leg; a body that does not account for every leg marks every
+        leg uncertain (never a mix of one leg holding the envelope and padded unknowns)."""
         if not legs:
             return MultiLegResult(results=[], atomic_ok=True)
         if len(legs) > MULTI_LEG_MAX:
@@ -851,67 +983,95 @@ class SigClient:
         self._check_deadline()
         tid = await self.ensure_tournament_id()
         group_key = _group_key(legs)
+        keys = [r.idempotency_key for r in legs]
         body = {
             "tournamentId": tid,
             "idempotencyKey": group_key,
             "legs": [self._order_body(r, tid) for r in legs],
         }
+        prio = priority if priority is not None else min(strategy_priority(r.strategy) for r in legs)
         try:
             payload = await self._request(
-                "POST", "/orders/multi-leg", json=body, write=True, priority=priority
+                "POST", "/orders/multi-leg", json=body, write=True, priority=prio, deadline=True
             )
         except OrderStatusUnknown as e:
             log.warning("multi-leg %s uncertain: %s", group_key, e)
-            return MultiLegResult(
-                group_id=group_key,
-                results=[
-                    OrderResult(uncertain=True, status="unknown", idempotencyKey=r.idempotency_key)
-                    for r in legs
-                ],
-                atomic_ok=False,
-            )
-        items = _leg_results(payload, len(legs))
-        results = [_parse_order_result(it, r.idempotency_key) for it, r in zip(items, legs, strict=True)]
-        ok = all(
-            not r.uncertain and (r.status or "").lower() not in ("rejected", "error", "failed")
-            for r in results
-        )
+            return MultiLegResult(group_id=group_key, results=_all_uncertain(keys), atomic_ok=False)
         gid = (
             pick(unwrap(payload), "groupId", "group_id", "multiLegId", "id")
             if isinstance(payload, Mapping)
             else None
         )
-        return MultiLegResult(
-            group_id=str(gid) if gid is not None else group_key, results=results, atomic_ok=ok
+        group_id = str(gid) if gid is not None else group_key
+        items = _split_legs(payload, keys)
+        if items is None:
+            err = _error_envelope(payload)
+            if err is not None:
+                log.warning("multi-leg %s rejected as a group: %s", group_key, err[1])
+                return MultiLegResult(group_id=group_id, results=_all_rejected(keys, err), atomic_ok=False)
+            log.warning(
+                "multi-leg %s: response cannot be split into %d legs; all legs unknown: %s",
+                group_key,
+                len(keys),
+                str(payload)[:400],
+            )
+            return MultiLegResult(group_id=group_id, results=_all_uncertain(keys), atomic_ok=False)
+        results = [_parse_order_result(it, k) for it, k in zip(items, keys, strict=True)]
+        if not all(_has_receipt(r) for r in results):
+            log.warning(
+                "multi-leg %s: response does not account for every leg; all legs unknown: %s",
+                group_key,
+                str(payload)[:400],
+            )
+            return MultiLegResult(group_id=group_id, results=_all_uncertain(keys), atomic_ok=False)
+        ok = all(
+            not r.uncertain and (r.status or "").lower() not in ("rejected", "error", "failed")
+            for r in results
         )
+        return MultiLegResult(group_id=group_id, results=results, atomic_ok=ok)
 
-    async def place_batch(self, reqs: list[OrderRequest], *, priority: int = 2) -> list[OrderResult]:
-        """POST /orders/batch (<= 50 independent orders; a 207 carries per-order results)."""
+    async def place_batch(self, reqs: list[OrderRequest], *, priority: int | None = None) -> list[OrderResult]:
+        """POST /orders/batch (<= 50 independent orders; a 207 carries per-order results). An order whose result
+        is missing or unrecognisable is reported uncertain."""
         if not reqs:
             return []
         if len(reqs) > BATCH_MAX:
             raise ValidationError(f"batch accepts at most {BATCH_MAX} orders", None, "TOO_MANY_ORDERS")
         self._check_deadline()
         tid = await self.ensure_tournament_id()
+        keys = [r.idempotency_key for r in reqs]
         body = {
             "tournamentId": tid,
             "idempotencyKey": _group_key(reqs),
             "orders": [self._order_body(r, tid) for r in reqs],
         }
+        prio = priority if priority is not None else min(strategy_priority(r.strategy) for r in reqs)
         try:
             payload = await self._request(
-                "POST", "/orders/batch", json=body, write=True, priority=priority, extra_ok=(207,)
+                "POST", "/orders/batch", json=body, write=True, priority=prio, extra_ok=(207,), deadline=True
             )
         except OrderStatusUnknown as e:
             log.warning("batch uncertain: %s", e)
-            return [
-                OrderResult(uncertain=True, status="unknown", idempotencyKey=r.idempotency_key) for r in reqs
-            ]
-        items = _leg_results(payload, len(reqs))
-        return [_parse_order_result(it, r.idempotency_key) for it, r in zip(items, reqs, strict=True)]
+            return _all_uncertain(keys)
+        items = _split_legs(payload, keys)
+        if items is None:
+            err = _error_envelope(payload)
+            if err is not None:
+                return _all_rejected(keys, err)
+            log.warning("batch: response cannot be split into %d orders: %s", len(keys), str(payload)[:400])
+            return _all_uncertain(keys)
+        results = [_parse_order_result(it, k) for it, k in zip(items, keys, strict=True)]
+        for r in results:
+            if not _has_receipt(r):
+                r.uncertain = True
+        return results
 
-    async def cancel_order(self, order_id: str, *, priority: int = 2) -> bool:
-        """DELETE /orders/{id}. False when the exchange no longer knows the order or the outcome is unknown."""
+    async def cancel_order(self, order_id: str, *, priority: int = PRIORITY_CANCEL) -> bool:
+        """DELETE /orders/{id}. True when cancelled; False ONLY when the exchange no longer knows the order
+        (404/410: already filled, expired or cancelled).
+
+        An unknown outcome is never reported as False: a timeout, transport failure, 502 or other 5xx raises
+        OrderStatusUnknown and a 503 raises TransientError, because the order may still be live."""
         tid = self.tournament_id
         try:
             await self._request(
@@ -922,20 +1082,49 @@ class SigClient:
                 return False
             raise
         except OrderStatusUnknown as e:
-            log.warning("cancel %s uncertain: %s", order_id, e)
-            return False
+            log.warning("cancel %s uncertain (order may still be live): %s", order_id, e)
+            raise
         return True
 
     async def cancel_all(self, exchange_id: str | None = None, *, priority: int = 0) -> int:
-        """POST /orders/cancel-all (priority 0: the kill switch). Accepts 207/422 partial results."""
+        """POST /orders/cancel-all (priority 0: the kill switch). Returns how many orders were cancelled.
+
+        A failure is never reported as "nothing to cancel". Raises CancelAllIncomplete when the per-order results
+        (207/422) name orders that were not cancelled (`.failed`) or when a 207 cannot be read; ValidationError for
+        an error envelope (e.g. a 422 with no per-order results); OrderStatusUnknown on a timeout / 5xx. Orders
+        reported as already gone (not found, filled, expired) are not failures."""
         tid = await self.ensure_tournament_id()
         body: dict[str, Any] = {"tournamentId": tid}
         if exchange_id:
             body["exchangeId"] = str(exchange_id)
-        payload = await self._request(
-            "POST", "/orders/cancel-all", json=body, write=True, priority=priority, extra_ok=(207, 422)
+        status, payload = await self._request(
+            "POST",
+            "/orders/cancel-all",
+            json=body,
+            write=True,
+            priority=priority,
+            extra_ok=(207, 422),
+            with_status=True,
         )
-        return _cancelled_count(payload)
+        cancelled, failed, recognised = _cancel_outcome(payload)
+        if failed:
+            log.error("cancel-all: %d cancelled, %d NOT cancelled: %s", cancelled, len(failed), failed[:20])
+            raise CancelAllIncomplete(
+                f"cancel-all left {len(failed)} orders uncancelled", status, cancelled=cancelled, failed=failed
+            )
+        if recognised:
+            return cancelled
+        err = _error_envelope(payload)
+        if err is not None or status == 422:
+            code, message = err or (None, f"cancel-all rejected: {str(payload)[:200]}")
+            raise ValidationError(message, status, code or "VALIDATION_ERROR")
+        if status == 207:
+            raise CancelAllIncomplete(
+                f"cancel-all returned an unreadable partial result: {str(payload)[:200]}", status
+            )
+        if payload is not None:
+            log.warning("cancel-all: unrecognised %s body, count unknown: %s", status, str(payload)[:300])
+        return 0
 
     # -- tournament-level reads --------------------------------------------------------------
     async def get_leaderboard(self, limit: int = 25) -> Leaderboard:
@@ -964,8 +1153,11 @@ class SigClient:
         rows = await self._paginate("/relationships/constraints", params)
         return [v for v in (_parse_violation(x) for x in rows if isinstance(x, Mapping)) if v is not None]
 
-    async def realtime_token(self, *, priority: int = 1) -> RealtimeToken:
-        """POST /realtime/token -> supabaseUrl, anonKey, token, expiresAt (+ channels.user when given)."""
+    async def realtime_token(self, *, priority: int = PRIORITY_HOUSEKEEPING) -> RealtimeToken:
+        """POST /realtime/token -> supabaseUrl, anonKey, token, expiresAt (+ channels.user when given).
+
+        It costs a write, so it queues behind every order and cancel (housekeeping priority); RealtimeFeed reuses
+        one token while it is valid."""
         payload = unwrap(
             await self._request("POST", "/realtime/token", json={}, write=True, priority=priority)
         )
@@ -1109,10 +1301,17 @@ def _parse_position(raw: Any) -> PositionInfo | None:
         return None
     eid = pick(raw, "exchangeId", "exchange_id", "exchange.id")
     qty = to_int(pick(raw, "quantity", "qty", "shares", "position", "netQuantity"))
+    split = False
+    if qty is None:  # {yesShares, noShares} flavour: net it (+YES / -NO)
+        yes = to_int(pick(raw, "yesShares", "yes_shares", "yesQuantity", "yes_quantity"))
+        no = to_int(pick(raw, "noShares", "no_shares", "noQuantity", "no_quantity"))
+        if yes is not None or no is not None:
+            qty, split = (yes or 0) - (no or 0), True
     if eid is None or qty is None:
+        _warn_shape("position", raw, "dropping a position row with no recognisable exchange id / quantity")
         return None
     side = norm_side(pick(raw, "side", "option", "outcome"))
-    if side == "no" and qty > 0:
+    if side == "no" and qty > 0 and not split:
         qty = -qty
     extra = {k: v for k, v in raw.items() if k not in {"exchange_id", "quantity", "avg_price", "mark"}}
     return PositionInfo(
@@ -1227,46 +1426,207 @@ def _parse_order_result(raw: Any, idempotency_key: str | None = None) -> OrderRe
     return OrderResult.model_validate(norm)
 
 
-def _leg_results(payload: Any, n: int) -> list[Any]:
-    """Per-leg results from a multi-leg/batch body: {data:[{index,data}]}, {results:[...]}, {orders:[...]}, [...]"""
-    body = unwrap(payload, "data", "results", "orders", "legs", "items")
-    if isinstance(body, Mapping):
-        body = pick(body, "results", "orders", "legs", "items", default=[body])
-    items = list(body) if isinstance(body, list) else [body]
-    if items and all(isinstance(it, Mapping) and "index" in it for it in items):
-        items.sort(key=lambda it: to_int(it.get("index")) or 0)
-    while len(items) < n:
-        items.append(None)
-    return items[:n]
+def _item_key(it: Any) -> str | None:
+    """The idempotency key a per-leg / per-order result echoes (top level, or inside data / order)."""
+    if not isinstance(it, Mapping):
+        return None
+    for src in (it, it.get("data"), it.get("order")):
+        if isinstance(src, Mapping):
+            k = pick(src, "idempotencyKey", "idempotency_key", "clientOrderId")
+            if k is not None:
+                return str(k)
+    return None
 
 
-def _cancelled_count(payload: Any) -> int:
-    if payload is None:
-        return 0
-    if isinstance(payload, list):
-        return sum(1 for it in payload if _cancel_ok(it))
-    if isinstance(payload, Mapping):
-        n = to_int(
-            pick(
-                payload, "cancelled", "canceled", "cancelledCount", "canceledCount", "count", "data.cancelled"
-            )
-        )
-        if n is not None:
-            return n
-        items = pick(payload, "results", "data", "orders", "cancelledOrders", "cancelled_orders")
-        if isinstance(items, list):
-            return sum(1 for it in items if _cancel_ok(it))
-    return 0
+def _split_legs(payload: Any, keys: Sequence[str]) -> list[Any] | None:
+    """Per-leg result objects in leg order, or None when the body cannot be split leg by leg.
+
+    Shapes: {data:[{index,data}]}, {results|orders|legs|items:[...]}, a bare list, results keyed by idempotency key
+    ({orders:{<key>:{...}}}) or by index, and a bare id list ({orderIds:[...]}). List items are matched to legs
+    by idempotency key first, then by `index`, then by position (only when the counts agree). A leg with no
+    matching item gets None (the caller treats it as unknown)."""
+    n = len(keys)
+    body = unwrap(payload, "data")
+    if isinstance(body, list):
+        return _match_items(body, keys)
+    if not isinstance(body, Mapping):
+        return None
+    found = pick(body, "results", "orders", "legs", "items", "orderIds", "order_ids")
+    if isinstance(found, list):
+        return _match_items(found, keys)
+    keyed = _keyed_results(found if isinstance(found, Mapping) else body, keys)
+    if keyed is not None:
+        return keyed
+    if n == 1 and pick(body, "orderId", "order_id") is not None:
+        return [body]  # a single-order receipt for a one-leg request
+    return None
 
 
-def _cancel_ok(it: Any) -> bool:
+def _keyed_results(mapping: Mapping[str, Any], keys: Sequence[str]) -> list[Any] | None:
+    if any(k in mapping for k in keys):
+        return [mapping.get(k) for k in keys]
+    if mapping and all(str(k).isdigit() for k in mapping):
+        return [mapping.get(str(i)) for i in range(len(keys))]
+    return None
+
+
+def _match_items(items: Sequence[Any], keys: Sequence[str]) -> list[Any] | None:
+    n = len(keys)
+    item_keys = [_item_key(it) for it in items]
+    if any(k in keys for k in item_keys if k is not None):
+        by_key = {k: it for k, it in zip(item_keys, items, strict=True) if k is not None}
+        return [by_key.get(k) for k in keys]
+    if items and all(isinstance(it, Mapping) and to_int(it.get("index")) is not None for it in items):
+        by_index = {to_int(it.get("index")): it for it in items}
+        return [by_index.get(i) for i in range(n)]
+    if len(items) != n:
+        return None
+    out: list[Any] = []
+    for it in items:
+        if isinstance(it, Mapping):
+            out.append(it)
+        elif isinstance(it, (str, int)) and not isinstance(it, bool):
+            out.append({"orderId": str(it)})  # a bare order id
+        else:
+            out.append(None)
+    return out
+
+
+def _has_receipt(r: OrderResult) -> bool:
+    return not r.uncertain and (r.order_id is not None or r.status is not None)
+
+
+def _all_uncertain(keys: Sequence[str]) -> list[OrderResult]:
+    return [OrderResult(uncertain=True, status="unknown", idempotencyKey=k) for k in keys]
+
+
+def _all_rejected(keys: Sequence[str], err: tuple[str | None, str]) -> list[OrderResult]:
+    code, message = err
+    return [OrderResult(status="rejected", idempotencyKey=k, error=message, errorCode=code) for k in keys]
+
+
+def _error_envelope(payload: Any) -> tuple[str | None, str] | None:
+    """(code, message) when a body is a request-level failure ({success:false,...} / {error:{...}}), else None."""
+    if not isinstance(payload, Mapping):
+        return None
+    data = payload.get("data")
+    err = payload.get("error")
+    failed = to_bool(payload.get("success")) is False or (
+        isinstance(data, Mapping) and to_bool(data.get("success")) is False
+    )
+    if not (failed or err):
+        return None
+    if not isinstance(err, Mapping) and isinstance(data, Mapping) and isinstance(data.get("error"), Mapping):
+        err = data["error"]
+    src = err if isinstance(err, Mapping) else payload
+    code = pick(src, "code", "errorCode")
+    message = pick(src, "message", "detail", "details", "msg")
+    if message is None and isinstance(err, str):
+        message = err
+    return (str(code) if code is not None else None), str(message or "request failed")
+
+
+_GONE_HINTS = (
+    "not_found",
+    "notfound",
+    "not found",
+    "already",
+    "gone",
+    "not_open",
+    "not open",
+    "filled",
+    "expired",
+    "closed",
+    "inactive",
+)
+_CANCEL_COUNT_KEYS = ("cancelled", "canceled", "cancelledCount", "canceledCount", "count")
+_CANCEL_FAILED_KEYS = ("failed", "failures", "errors", "notCancelled", "not_cancelled")
+_CANCEL_RESULT_KEYS = ("results", "data", "orders", "cancelledOrders", "cancelled_orders", "canceledOrders")
+
+
+def _cancel_item(it: Any) -> str:
+    """'ok' | 'gone' | 'failed' for one per-order cancel result (a bare id counts as cancelled)."""
+    if not isinstance(it, Mapping):
+        return "ok" if it is not None else "failed"
+    st = str(pick(it, "status", "state", default="")).lower()
+    err = it.get("error")
+    ok = to_bool(pick(it, "ok", "success", "cancelled", "canceled"))
+    if st in ("filled", "expired"):
+        return "gone"
+    if not (err or st in ("error", "failed", "rejected", "not_found") or ok is False):
+        return "ok"
+    if isinstance(err, Mapping):
+        err_text = " ".join(str(err.get(k, "")) for k in ("code", "message"))
+    else:
+        err_text = str(err or "")
+    detail = f"{st} {err_text} {pick(it, 'reason', 'message', default='')}".lower()
+    return "gone" if any(h in detail for h in _GONE_HINTS) else "failed"
+
+
+def _order_id_of(it: Any) -> str:
     if isinstance(it, Mapping):
-        st = str(pick(it, "status", "state", default="")).lower()
-        if "error" in it or st in ("error", "failed", "rejected", "not_found"):
-            return False
-        ok = to_bool(pick(it, "ok", "success", "cancelled", "canceled"))
-        return True if ok is None else ok
-    return it is not None
+        return str(pick(it, "orderId", "order_id", "id", default="?"))
+    return str(it)
+
+
+def _tally(items: Sequence[Any], *, failed_list: bool = False) -> tuple[int, list[str]]:
+    """(cancelled, failed ids) over per-order results; in a `failed` list every non-gone item is a failure."""
+    cancelled = 0
+    failed: list[str] = []
+    for it in items:
+        verdict = _cancel_item(it)
+        if verdict == "gone":
+            continue
+        if failed_list or verdict == "failed":
+            failed.append(_order_id_of(it))
+        else:
+            cancelled += 1
+    return cancelled, failed
+
+
+def _cancel_outcome(payload: Any) -> tuple[int, list[str], bool]:
+    """(cancelled count, ids NOT cancelled, whether the body was recognised) for a cancel-all response."""
+    if isinstance(payload, list):
+        cancelled, failed = _tally(payload)
+        return cancelled, failed, True
+    if not isinstance(payload, Mapping):
+        return 0, [], False
+    scopes: list[Mapping[str, Any]] = [payload]
+    if isinstance(payload.get("data"), Mapping):
+        scopes.append(payload["data"])
+    count: int | None = None
+    failed: list[str] = []
+    recognised = False
+    for scope in scopes:
+        scope_count: int | None = None
+        for key in _CANCEL_COUNT_KEYS:
+            v = scope.get(key)
+            if isinstance(v, list):
+                c, f = _tally(v)
+                scope_count, recognised = c, True
+                failed.extend(f)
+                break
+            if v is not None and not isinstance(v, bool) and to_int(v) is not None:
+                scope_count, recognised = to_int(v), True
+                break
+        for key in _CANCEL_FAILED_KEYS:
+            v = scope.get(key)
+            if isinstance(v, list):
+                recognised = True
+                failed.extend(_tally(v, failed_list=True)[1])
+                break
+        for key in _CANCEL_RESULT_KEYS:
+            v = scope.get(key)
+            if isinstance(v, list):
+                c, f = _tally(v)
+                recognised = True
+                failed.extend(f)
+                if scope_count is None:
+                    scope_count = c
+                break
+        if count is None and scope_count is not None:
+            count = scope_count
+    return (count or 0), list(dict.fromkeys(failed)), recognised
 
 
 def _parse_leaderboard(payload: Any, *, me_username: str | None, me_profile: str | None) -> Leaderboard:
